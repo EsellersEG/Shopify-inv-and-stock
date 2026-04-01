@@ -313,7 +313,7 @@ export default function SyncTool() {
                className="w-full max-w-md py-6 bg-white text-black font-black text-xl rounded-2xl hover:bg-gray-200 disabled:opacity-50 transition-all flex items-center justify-center space-x-4 shadow-2l"
             >
               {syncStatus === "loading" ? <RefreshCw className="w-6 h-6 animate-spin" /> : <Play className="w-6 h-6 fill-black" />}
-              <span>{syncStatus === "loading" ? "Operation Running" : "Ignite Pipeline"}</span>
+              <span>{syncStatus === "loading" ? "Operation Running" : "Start Sync"}</span>
             </button>
 
             {syncStatus === "loading" && (
