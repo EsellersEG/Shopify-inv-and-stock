@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Settings, RefreshCw, Database, CheckCircle2, AlertCircle, Play, Save, LayoutGrid, Store } from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -27,16 +27,92 @@ export default function SyncTool() {
   const [logs, setLogs] = useState<string[]>([]);
   const [syncResult, setSyncResult] = useState<{ updated: number; errors: number; duration?: number } | null>(null);
 
+  const eventSourceRef = useRef<EventSource | null>(null);
+
   useEffect(() => {
     fetchMyStores();
+    return () => {
+      if (eventSourceRef.current) eventSourceRef.current.close();
+    };
   }, []);
 
   useEffect(() => {
-    // If we came from a dashboard with a specific store
     if (location.state?.store) {
       applyStore(location.state.store);
     }
   }, [location.state]);
+
+  useEffect(() => {
+    if (shopDomain) {
+      checkSyncStatus();
+      setupStatusStream();
+    }
+    return () => {
+      if (eventSourceRef.current) eventSourceRef.current.close();
+    };
+  }, [shopDomain]);
+
+  const checkSyncStatus = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/sync/status?shopDomain=${shopDomain}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.status === 'loading') {
+        setSyncStatus("loading");
+        setSyncProgress(data.progress || { current: 0, total: 0 });
+        setSyncMessage(data.message || "Syncing in background...");
+      } else if (data.status === 'success') {
+        setSyncStatus("success");
+        setSyncResult(data.result);
+        setLogs(data.logs || []);
+        setSyncMessage(data.message || "Sync Complete");
+      } else if (data.status === 'error') {
+        setSyncStatus("error");
+        setLogs(data.logs || []);
+        setSyncMessage("Error occurred.");
+      }
+    } catch (e) {
+      console.error("Failed to check sync status", e);
+    }
+  };
+
+  const setupStatusStream = () => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
+    const es = new EventSource(`/api/sync/stream?shopDomain=${shopDomain}`);
+    eventSourceRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'progress') {
+          setSyncStatus("loading");
+          setSyncProgress({ current: data.current, total: data.total });
+          if (data.message) setSyncMessage(data.message);
+        } else if (data.type === 'complete') {
+          setSyncStatus("success");
+          setSyncResult({ updated: data.updatedCount, errors: data.errorCount, duration: data.duration });
+          setLogs(data.logs || []);
+          setSyncMessage(data.duration ? `Success! Processed in ${(data.duration / 1000).toFixed(1)}s` : "Sync Complete");
+        } else if (data.type === 'error') {
+          setSyncStatus("error");
+          setLogs([data.message]);
+          setSyncMessage("Critical Error occurred.");
+        }
+      } catch (e) {
+        console.error("Stream parse error", e);
+      }
+    };
+
+    es.onerror = (e) => {
+      console.error("SSE Error", e);
+      es.close();
+    };
+  };
 
   const fetchMyStores = async () => {
     const token = localStorage.getItem('token');
@@ -69,7 +145,7 @@ export default function SyncTool() {
     setLogs([]);
     setSyncResult(null);
     setSyncProgress({ current: 0, total: 0 });
-    setSyncMessage("Initializing server-side synchronization...");
+    setSyncMessage("Requesting server to start background sync...");
     
     try {
       const token = localStorage.getItem('token');
@@ -94,42 +170,14 @@ export default function SyncTool() {
         }),
       });
 
-      if (!res.body) throw new Error("ReadableStream not supported");
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.type === 'progress') {
-                setSyncProgress({ current: data.current, total: data.total });
-                if (data.message) setSyncMessage(data.message);
-              } else if (data.type === 'complete') {
-                setSyncStatus("success");
-                setSyncResult({ updated: data.updatedCount, errors: data.errorCount, duration: data.duration });
-                setLogs(data.logs || []);
-                setSyncMessage(data.duration ? `Success! Processed in ${(data.duration / 1000).toFixed(1)}s` : "Sync Complete");
-              } else if (data.type === 'error') {
-                setSyncStatus("error");
-                setLogs([data.message]);
-                setSyncMessage("Critial Error occurred.");
-              }
-            } catch (e) {
-              console.error("Stream parse error", e);
-            }
-          }
-        }
+      const data = await res.json();
+      if (!res.ok) {
+        setSyncStatus("error");
+        setSyncMessage(data.error || "Operation failed to start.");
+        setLogs([data.error || "Check if another sync is already running."]);
+      } else {
+        // SSE will take over and update the UI
+        setSyncMessage("Sync triggered. Monitoring process...");
       }
     } catch (e: any) {
       setSyncStatus("error");

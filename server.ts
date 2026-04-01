@@ -223,170 +223,110 @@ async function startServer() {
     }
   });
 
-  // Sync Sheets to Shopify (Streaming)
+  // Background Sync Management
+  const syncSessions: Record<string, any> = {};
+
+  const updateSyncSession = (shopDomain: string, data: any) => {
+    if (!syncSessions[shopDomain]) {
+      syncSessions[shopDomain] = { logs: [], progress: { current: 0, total: 0 }, status: 'idle', message: '' };
+    }
+    const session = syncSessions[shopDomain];
+    if (data.type === 'progress') {
+      session.progress = { current: data.current, total: data.total };
+      session.message = data.message;
+      session.status = 'loading';
+    } else if (data.type === 'complete') {
+      session.status = 'success';
+      session.result = { updated: data.updatedCount, errors: data.errorCount, duration: data.duration };
+      session.logs = data.logs || [];
+      session.message = 'Sync Complete';
+    } else if (data.type === 'error') {
+      session.status = 'error';
+      session.logs = [data.message];
+      session.message = 'Error occurred';
+    }
+    // Emit to active SSE clients if any
+    (session.clients || []).forEach((c: any) => c.res.write(`data: ${JSON.stringify(data)}\n\n`));
+  };
+
+  // Sync Sheets to Shopify (Background Process)
   app.post("/api/sync/sheets-to-shopify", authenticateToken, async (req, res) => {
     const { shopDomain, accessToken, spreadsheetId, serviceAccountJson, mapping, sheetName, syncMode } = req.body;
     
-    // Set headers for Server-Sent Events (SSE)
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
+    if (syncSessions[shopDomain]?.status === 'loading') {
+      return res.status(400).json({ error: "A sync is already running for this store." });
+    }
 
-    const sendEvent = (data: any) => {
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    // Initialize/Reset session
+    syncSessions[shopDomain] = { 
+      status: 'loading', 
+      progress: { current: 0, total: 0 }, 
+      message: 'Starting background sync...', 
+      logs: [],
+      clients: syncSessions[shopDomain]?.clients || [] 
     };
 
-    try {
-      const startTime = Date.now();
-      // 1. Get data from Google Sheets
-      const credentials = JSON.parse(serviceAccountJson);
-      const auth = new google.auth.GoogleAuth({
-        credentials,
-        scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-      });
-      const sheets = google.sheets({ version: "v4", auth });
-      
-      const response = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: sheetName || "Sheet1",
-      });
+    // Start background task
+    (async () => {
+      try {
+        const startTime = Date.now();
+        updateSyncSession(shopDomain, { type: 'progress', current: 0, total: 0, message: 'Fetching Google Sheets data...' });
 
-      const rows = response.data.values;
-      if (!rows || rows.length === 0) {
-        sendEvent({ type: 'error', message: "No data found in sheet." });
-        return res.end();
-      }
-
-      // Assume first row is headers
-      const headers = rows[0];
-      const skuIndex = headers.indexOf(mapping.sku);
-      const priceIndex = headers.indexOf(mapping.price);
-      const inventoryIndex = headers.indexOf(mapping.inventory);
-
-      if (skuIndex === -1) {
-        sendEvent({ type: 'error', message: `SKU column '${mapping.sku}' not found.` });
-        return res.end();
-      }
-
-      let updatedCount = 0;
-      let errorCount = 0;
-      const logs: string[] = [];
-      const totalRows = rows.length - 1;
-
-      const shouldSyncPrice = syncMode === 'price' || syncMode === 'both';
-      const shouldSyncStock = syncMode === 'stock' || syncMode === 'both';
-
-      // Fetch location ID once if we need to sync stock
-      let locationId: string | null = null;
-      if (shouldSyncStock) {
-        const locRes = await fetch(`https://${shopDomain}/admin/api/2024-01/locations.json`, {
-          headers: { "X-Shopify-Access-Token": accessToken },
+        const credentials = JSON.parse(serviceAccountJson);
+        const auth = new google.auth.GoogleAuth({
+          credentials,
+          scopes: ["https://www.googleapis.com/auth/spreadsheets"],
         });
-        if (locRes.ok) {
-          const locData = await locRes.json();
-          locationId = locData.locations[0]?.id;
-        } else {
-          sendEvent({ type: 'error', message: "Failed to fetch Shopify locations. Check your access token permissions (needs read_locations)." });
-          return res.end();
+        const sheets = google.sheets({ version: "v4", auth });
+        
+        const sheetRes = await sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: sheetName || "Sheet1",
+        });
+
+        const rows = sheetRes.data.values;
+        if (!rows || rows.length === 0) {
+          return updateSyncSession(shopDomain, { type: 'error', message: "No data found in sheet." });
         }
-      }
 
-      const skusFromSheet = new Set<string>();
-      for (let i = 1; i < rows.length; i++) {
-        const sku = rows[i][skuIndex];
-        if (sku) skusFromSheet.add(sku);
-      }
-      const skusArray = Array.from(skusFromSheet);
+        const headers = rows[0];
+        const skuIndex = headers.indexOf(mapping.sku);
+        const priceIndex = headers.indexOf(mapping.price);
+        const inventoryIndex = headers.indexOf(mapping.inventory);
 
-      const shopifyVariants = new Map<string, any>();
+        if (skuIndex === -1) {
+          return updateSyncSession(shopDomain, { type: 'error', message: `SKU column '${mapping.sku}' not found.` });
+        }
 
-      if (skusArray.length > 2000) {
-        sendEvent({ type: 'progress', current: 0, total: totalRows, message: 'Fetching existing Shopify products for fast comparison...' });
-        let hasNextPage = true;
-        let cursor: string | null = null;
+        let updatedCount = 0;
+        let errorCount = 0;
+        const logs: string[] = [];
+        const totalRows = rows.length - 1;
 
-        while (hasNextPage) {
-          const query = `
-            query getVariants($cursor: String) {
-              productVariants(first: 100, after: $cursor) {
-                pageInfo { hasNextPage endCursor }
-                edges {
-                  node {
-                    id
-                    sku
-                    price
-                    inventoryItem {
-                      id
-                      inventoryLevels(first: 5) {
-                        edges {
-                          node {
-                            location { id }
-                            quantities(names: ["available"]) {
-                              name
-                              quantity
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          `;
-          const variables = { cursor };
-          const gqlRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
-            method: "POST",
-            headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-            body: JSON.stringify({ query, variables }),
+        const shouldSyncPrice = syncMode === 'price' || syncMode === 'both';
+        const shouldSyncStock = syncMode === 'stock' || syncMode === 'both';
+
+        let locationId: string | null = null;
+        if (shouldSyncStock) {
+          const locRes = await fetch(`https://${shopDomain}/admin/api/2024-01/locations.json`, {
+            headers: { "X-Shopify-Access-Token": accessToken },
           });
-
-          if (!gqlRes.ok) {
-            sendEvent({ type: 'error', message: 'Failed to fetch Shopify products for comparison.' });
-            return res.end();
-          }
-
-          const data = await gqlRes.json();
-          if (data.errors) {
-            sendEvent({ type: 'error', message: `GraphQL Error: ${data.errors[0].message}` });
-            return res.end();
-          }
-
-          const connection = data.data.productVariants;
-          for (const edge of connection.edges) {
-            const node = edge.node;
-            if (node.sku) {
-              let available = 0;
-              if (node.inventoryItem?.inventoryLevels?.edges) {
-                const level = node.inventoryItem.inventoryLevels.edges.find((e: any) => e.node.location.id === `gid://shopify/Location/${locationId}`);
-                if (level) {
-                  const availableQuantity = level.node.quantities?.find((q: any) => q.name === 'available');
-                  if (availableQuantity) available = availableQuantity.quantity;
-                }
-              }
-              shopifyVariants.set(node.sku, {
-                variantId: node.id,
-                inventoryItemId: node.inventoryItem?.id,
-                price: node.price,
-                available: available
-              });
-            }
-          }
-
-          hasNextPage = connection.pageInfo.hasNextPage;
-          cursor = connection.pageInfo.endCursor;
-          sendEvent({ type: 'progress', current: shopifyVariants.size, total: totalRows, message: `Fetched ${shopifyVariants.size} products from Shopify...` });
-          
-          const throttle = data.extensions?.cost?.throttleStatus;
-          if (throttle && throttle.currentlyAvailable < 500) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
+          if (locRes.ok) {
+            const locData = await locRes.json();
+            locationId = locData.locations[0]?.id;
+          } else {
+            return updateSyncSession(shopDomain, { type: 'error', message: "Failed to fetch Shopify locations." });
           }
         }
-      } else {
-        sendEvent({ type: 'progress', current: 0, total: skusArray.length, message: `Fetching ${skusArray.length} products from Shopify for comparison...` });
-        const chunkSize = 50;
+
+        const skusArray = Array.from(new Set(rows.slice(1).map(r => r[skuIndex]).filter(Boolean)));
+        const shopifyVariants = new Map<string, any>();
+
+        // Fetching Shopify Variants (Optimized)
+        updateSyncSession(shopDomain, { type: 'progress', current: 0, total: totalRows, message: 'Fetching Shopify products...' });
+        const chunkSize = 100;
         for (let i = 0; i < skusArray.length; i += chunkSize) {
-          const chunk = skusArray.slice(i, i + chunkSize);
+          const chunk = (skusArray as string[]).slice(i, i + chunkSize);
           const queryStr = chunk.map(sku => `sku:"${sku.replace(/"/g, '\\"')}"`).join(' OR ');
           
           let hasNextPage = true;
@@ -399,21 +339,11 @@ async function startServer() {
                   pageInfo { hasNextPage endCursor }
                   edges {
                     node {
-                      id
-                      sku
-                      price
+                      id sku price
                       inventoryItem {
                         id
-                        inventoryLevels(first: 5) {
-                          edges {
-                            node {
-                              location { id }
-                              quantities(names: ["available"]) {
-                                name
-                                quantity
-                              }
-                            }
-                          }
+                        inventoryLevels(first: 1) {
+                          edges { node { location { id } quantities(names: ["available"]) { name quantity } } }
                         }
                       }
                     }
@@ -421,223 +351,141 @@ async function startServer() {
                 }
               }
             `;
-            const variables = { cursor, queryStr };
             const gqlRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
               method: "POST",
               headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-              body: JSON.stringify({ query, variables }),
+              body: JSON.stringify({ query, variables: { cursor, queryStr } }),
             });
 
-            if (!gqlRes.ok) {
-              sendEvent({ type: 'error', message: 'Failed to fetch Shopify products for comparison.' });
-              return res.end();
-            }
+            if (!gqlRes.ok) break;
 
             const data = await gqlRes.json();
-            if (data.errors) {
-              sendEvent({ type: 'error', message: `GraphQL Error: ${data.errors[0].message}` });
-              return res.end();
-            }
+            if (data.errors) break;
 
             const connection = data.data.productVariants;
             for (const edge of connection.edges) {
               const node = edge.node;
               if (node.sku) {
                 let available = 0;
-                if (node.inventoryItem?.inventoryLevels?.edges) {
-                  const level = node.inventoryItem.inventoryLevels.edges.find((e: any) => e.node.location.id === `gid://shopify/Location/${locationId}`);
-                  if (level) {
-                    const availableQuantity = level.node.quantities?.find((q: any) => q.name === 'available');
-                    if (availableQuantity) available = availableQuantity.quantity;
-                  }
+                const level = node.inventoryItem?.inventoryLevels?.edges?.[0]?.node;
+                if (level) {
+                   available = level.quantities?.find((q: any) => q.name === 'available')?.quantity || 0;
                 }
-                shopifyVariants.set(node.sku, {
-                  variantId: node.id,
-                  inventoryItemId: node.inventoryItem?.id,
-                  price: node.price,
-                  available: available
-                });
+                shopifyVariants.set(node.sku, { variantId: node.id, inventoryItemId: node.inventoryItem?.id, price: node.price, available });
               }
             }
-
             hasNextPage = connection.pageInfo.hasNextPage;
             cursor = connection.pageInfo.endCursor;
-            
-            const throttle = data.extensions?.cost?.throttleStatus;
-            if (throttle && throttle.currentlyAvailable < 500) {
-              await new Promise(resolve => setTimeout(resolve, 1000));
-            }
           }
-          sendEvent({ type: 'progress', current: Math.min(i + chunkSize, skusArray.length), total: skusArray.length, message: `Fetched ${Math.min(i + chunkSize, skusArray.length)} of ${skusArray.length} products from Shopify...` });
-        }
-      }
-
-      sendEvent({ type: 'progress', current: 0, total: totalRows, message: 'Comparing data to find changes...' });
-
-      const priceUpdates: { id: string, price: string, sku: string }[] = [];
-      const inventoryUpdates: { inventoryItemId: string, locationId: string, quantity: number, sku: string }[] = [];
-
-      for (let i = 1; i < rows.length; i++) {
-        const row = rows[i];
-        const sku = row[skuIndex];
-        const sheetPrice = priceIndex !== -1 ? row[priceIndex] : null;
-        const sheetInventory = inventoryIndex !== -1 ? row[inventoryIndex] : null;
-
-        if (!sku) continue;
-
-        const shopifyData = shopifyVariants.get(sku);
-        if (!shopifyData) {
-          logs.push(`SKU ${sku} not found in Shopify, skipping.`);
-          errorCount++;
-          continue;
+          updateSyncSession(shopDomain, { type: 'progress', current: Math.min(i + chunkSize, skusArray.length), total: skusArray.length, message: `Loaded ${shopifyVariants.size} stores products...` });
         }
 
-        if (shouldSyncPrice && sheetPrice !== null && sheetPrice !== undefined && sheetPrice !== "") {
-          if (parseFloat(sheetPrice) !== parseFloat(shopifyData.price)) {
+        // Compare and Batch Updates
+        const priceUpdates: any[] = [];
+        const inventoryUpdates: any[] = [];
+
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          const sku = row[skuIndex];
+          const sheetPrice = row[priceIndex];
+          const sheetInventory = row[inventoryIndex];
+          if (!sku) continue;
+
+          const shopifyData = shopifyVariants.get(sku);
+          if (!shopifyData) {
+            logs.push(`SKU ${sku} not found in Shopify`);
+            errorCount++;
+            continue;
+          }
+
+          if (shouldSyncPrice && sheetPrice && parseFloat(sheetPrice) !== parseFloat(shopifyData.price)) {
             priceUpdates.push({ id: shopifyData.variantId, price: sheetPrice, sku });
           }
-        }
 
-        if (shouldSyncStock && sheetInventory !== null && sheetInventory !== undefined && sheetInventory !== "") {
-          const parsedInv = parseInt(sheetInventory, 10);
-          if (!isNaN(parsedInv) && parsedInv !== shopifyData.available) {
-            inventoryUpdates.push({ 
-              inventoryItemId: shopifyData.inventoryItemId, 
-              locationId: `gid://shopify/Location/${locationId}`, 
-              quantity: parsedInv,
-              sku
-            });
+          if (shouldSyncStock && sheetInventory) {
+            const parsedInv = parseInt(sheetInventory, 10);
+            if (!isNaN(parsedInv) && parsedInv !== shopifyData.available) {
+              inventoryUpdates.push({ inventoryItemId: shopifyData.inventoryItemId, locationId: `gid://shopify/Location/${locationId}`, quantity: parsedInv, sku });
+            }
           }
         }
-      }
 
-      const totalUpdates = priceUpdates.length + inventoryUpdates.length;
-      let completedUpdates = 0;
-      
-      if (totalUpdates === 0) {
-        const duration = Date.now() - startTime;
-        sendEvent({ type: 'progress', current: totalRows, total: totalRows, message: `Everything is up to date! No changes needed.` });
-        sendEvent({ type: 'complete', updatedCount: 0, errorCount, logs, duration });
-        return res.end();
-      }
-
-      sendEvent({ type: 'progress', current: 0, total: totalUpdates, message: `Found ${totalUpdates} changes. Pushing updates to Shopify...` });
-
-      // Execute Inventory Updates (Batch of 100)
-      if (inventoryUpdates.length > 0) {
-        const batchSize = 100;
-        for (let i = 0; i < inventoryUpdates.length; i += batchSize) {
-          const batch = inventoryUpdates.slice(i, i + batchSize);
-          const quantities = batch.map(u => ({
-            inventoryItemId: u.inventoryItemId,
-            locationId: u.locationId,
-            quantity: u.quantity
-          }));
-
-          const query = `
-            mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
-              inventorySetQuantities(input: $input) {
-                userErrors { field message }
-              }
-            }
-          `;
-          const variables = {
-            input: {
-              name: "available",
-              reason: "correction",
-              ignoreCompareQuantity: true,
-              quantities: quantities
-            }
-          };
-
-          const gqlRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
-            method: "POST",
-            headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-            body: JSON.stringify({ query, variables }),
-          });
-
-          if (gqlRes.ok) {
-            const data = await gqlRes.json();
-            if (data.data?.inventorySetQuantities?.userErrors?.length > 0) {
-              logs.push(`Inventory batch error: ${data.data.inventorySetQuantities.userErrors[0].message}`);
-              errorCount += batch.length;
-            } else {
-              updatedCount += batch.length;
-            }
-            
-            const throttle = data.extensions?.cost?.throttleStatus;
-            if (throttle && throttle.currentlyAvailable < 200) {
-              await new Promise(resolve => setTimeout(resolve, 1000));
-            } else {
-              await new Promise(resolve => setTimeout(resolve, 200));
-            }
-          } else {
-            logs.push(`Failed to update inventory batch.`);
-            errorCount += batch.length;
-          }
-
-          completedUpdates += batch.length;
-          sendEvent({ type: 'progress', current: completedUpdates, total: totalUpdates, message: `Updating inventory... (${completedUpdates}/${totalUpdates})` });
+        const totalUpdates = priceUpdates.length + inventoryUpdates.length;
+        if (totalUpdates === 0) {
+           return updateSyncSession(shopDomain, { type: 'complete', updatedCount: 0, errorCount, logs, duration: Date.now() - startTime });
         }
-      }
 
-      // Execute Price Updates (Batch of 10 using aliases)
-      if (priceUpdates.length > 0) {
-        const batchSize = 10;
-        for (let i = 0; i < priceUpdates.length; i += batchSize) {
-          const batch = priceUpdates.slice(i, i + batchSize);
+        // Execute Batch Updates
+        let completed = 0;
+        // Inventory batches of 100
+        for (let i = 0; i < inventoryUpdates.length; i += 100) {
+          const batch = inventoryUpdates.slice(i, i + 100);
+          const mutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
+          const variables = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: batch.map(u => ({ inventoryItemId: u.inventoryItemId, locationId: u.locationId, quantity: u.quantity })) } };
           
-          let mutationString = `mutation {`;
-          batch.forEach((u, index) => {
-            mutationString += `
-              v${index}: productVariantUpdate(input: {id: "${u.id}", price: "${u.price}"}) {
-                userErrors { message }
-              }
-            `;
-          });
-          mutationString += `}`;
-
-          const gqlRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
+          await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
             method: "POST",
             headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-            body: JSON.stringify({ query: mutationString }),
+            body: JSON.stringify({ query: mutation, variables }),
           });
-
-          if (gqlRes.ok) {
-            const data = await gqlRes.json();
-            batch.forEach((u, index) => {
-              const errors = data.data?.[`v${index}`]?.userErrors;
-              if (errors && errors.length > 0) {
-                logs.push(`Failed to update price for SKU ${u.sku}: ${errors[0].message}`);
-                errorCount++;
-              } else {
-                updatedCount++;
-              }
-            });
-            
-            const throttle = data.extensions?.cost?.throttleStatus;
-            if (throttle && throttle.currentlyAvailable < 200) {
-              await new Promise(resolve => setTimeout(resolve, 1000));
-            } else {
-              await new Promise(resolve => setTimeout(resolve, 300));
-            }
-          } else {
-            logs.push(`Failed to update price batch.`);
-            errorCount += batch.length;
-          }
-
-          completedUpdates += batch.length;
-          sendEvent({ type: 'progress', current: completedUpdates, total: totalUpdates, message: `Updating prices... (${completedUpdates}/${totalUpdates})` });
+          completed += batch.length;
+          updatedCount += batch.length;
+          updateSyncSession(shopDomain, { type: 'progress', current: completed, total: totalUpdates, message: `Updating Inventory...` });
         }
-      }
 
-      const duration = Date.now() - startTime;
-      sendEvent({ type: 'complete', updatedCount, errorCount, logs, duration });
-      res.end();
-    } catch (error: any) {
-      sendEvent({ type: 'error', message: error.message });
-      res.end();
+        // Price batches of 10
+        for (let i = 0; i < priceUpdates.length; i += 10) {
+          const batch = priceUpdates.slice(i, i + 10);
+          let mutation = `mutation {`;
+          batch.forEach((u, index) => { mutation += `v${index}: productVariantUpdate(input: {id: "${u.id}", price: "${u.price}"}) { userErrors { message } }`; });
+          mutation += `}`;
+          
+          await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
+            method: "POST",
+            headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
+            body: JSON.stringify({ query: mutation }),
+          });
+          completed += batch.length;
+          updatedCount += batch.length;
+          updateSyncSession(shopDomain, { type: 'progress', current: completed, total: totalUpdates, message: `Updating Prices...` });
+        }
+
+        updateSyncSession(shopDomain, { type: 'complete', updatedCount, errorCount, logs, duration: Date.now() - startTime });
+      } catch (err: any) {
+        updateSyncSession(shopDomain, { type: 'error', message: err.message });
+      }
+    })();
+
+    res.json({ success: true, message: "Sync started in background" });
+  });
+
+  // Sync Status Polling
+  app.get("/api/sync/status", authenticateToken, (req, res) => {
+    const { shopDomain } = req.query;
+    const session = syncSessions[shopDomain as string];
+    if (!session) return res.json({ status: 'idle' });
+    const { clients, ...safeSession } = session;
+    res.json(safeSession);
+  });
+
+  // Sync Status Stream (SSE)
+  app.get("/api/sync/stream", (req, res) => {
+    const { shopDomain } = req.query;
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    if (!syncSessions[shopDomain as string]) {
+      syncSessions[shopDomain as string] = { logs: [], progress: { current: 0, total: 0 }, status: 'idle', message: '', clients: [] };
     }
+    
+    const session = syncSessions[shopDomain as string];
+    const client = { id: Date.now(), res };
+    session.clients = [...(session.clients || []), client];
+
+    req.on('close', () => {
+      session.clients = session.clients.filter((c: any) => c.id !== client.id);
+    });
   });
 
   // Vite middleware for development
