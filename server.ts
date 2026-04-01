@@ -299,11 +299,20 @@ async function startServer() {
     (session.clients || []).forEach((c: any) => c.res.write(`data: ${JSON.stringify(data)}\n\n`));
   };
 
+  app.post("/api/sync/cancel", authenticateToken, (req, res) => {
+    const { shopDomain } = req.body;
+    if (syncSessions[shopDomain]) {
+      syncSessions[shopDomain].cancelled = true;
+      syncSessions[shopDomain].message = "Cancelling process...";
+    }
+    res.json({ success: true });
+  });
+
   app.post("/api/sync/sheets-to-shopify", authenticateToken, async (req: Request, res: Response) => {
     const { shopDomain, accessToken, spreadsheetId, serviceAccountJson, mapping, sheetName, syncMode } = req.body;
     if (syncSessions[shopDomain]?.status === "loading") return res.status(400).json({ error: "Sync already running" });
 
-    syncSessions[shopDomain] = { status: "loading", progress: { current: 0, total: 0 }, message: "Starting...", logs: [], clients: syncSessions[shopDomain]?.clients || [] };
+    syncSessions[shopDomain] = { status: "loading", progress: { current: 0, total: 0 }, message: "Starting...", logs: [], clients: syncSessions[shopDomain]?.clients || [], cancelled: false };
 
     (async () => {
       try {
@@ -337,6 +346,7 @@ async function startServer() {
         const shopifyVariants = new Map();
 
         for (let i = 0; i < skusArray.length; i += 100) {
+          if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
           const chunk = skusArray.slice(i, i + 100);
           const queryStr = chunk.map((sku: any) => `sku:"${sku.replace(/"/g, '\\"')}"`).join(" OR ");
           const query = `query getVariants($queryStr: String) { productVariants(first: 100, query: $queryStr) { edges { node { id sku price inventoryItem { id inventoryLevels(first: 1) { edges { node { quantities(names: ["available"]) { quantity } } } } } } } } }`;
@@ -367,6 +377,7 @@ async function startServer() {
         if (updates.length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: 0, errorCount: 0, logs: [], duration: Date.now() - startTime });
 
         for (let i = 0; i < updates.length; i += 50) {
+          if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
           const batch = updates.slice(i, i + 50);
           const priceBatch = batch.filter((u: any) => u.type === "price");
           const invBatch = batch.filter((u: any) => u.type === "inv");

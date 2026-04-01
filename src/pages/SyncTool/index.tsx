@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Settings, RefreshCw, Database, CheckCircle2, AlertCircle, Play, Save, LayoutGrid, Store } from "lucide-react";
+import { api } from "../../lib/api";
+import { Settings, RefreshCw, Database, CheckCircle2, AlertCircle, Play, Save, LayoutGrid, Store, X } from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 
@@ -186,6 +187,15 @@ export default function SyncTool() {
     }
   };
 
+  const handleCancel = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      await api.post("/api/sync/cancel", { shopDomain });
+    } catch (e) {
+      console.error("Failed to cancel", e);
+    }
+  };
+
   return (
     <div className="max-w-6xl mx-auto pb-20">
       <header className="flex items-center justify-between mb-12">
@@ -254,25 +264,32 @@ export default function SyncTool() {
           </button>
 
           {syncStatus === "loading" && (
-             <div className="w-full max-w-xl mt-16 space-y-4">
-                <div className="flex justify-between font-bold text-gray-500 mb-2 px-2">
-                  <div className="flex flex-col">
-                    <span className="uppercase text-[10px] tracking-[0.2em] mb-1">{syncMessage}</span>
-                    <span className="text-white text-lg font-mono tracking-tighter">
-                      {syncProgress.current} <span className="text-gray-600">/ {syncProgress.total}</span>
-                    </span>
-                  </div>
-                  <span className="text-blue-500 font-black text-2xl font-mono">{Math.round((syncProgress.current / (syncProgress.total || 1)) * 100)}%</span>
-                </div>
-                <div className="h-5 bg-white/5 rounded-full overflow-hidden border border-white/5 p-1">
-                  <motion.div 
-                    className="h-full bg-blue-600 rounded-full shadow-[0_0_30px_rgba(37,99,235,0.4)]"
-                    initial={{ width: 0 }}
-                    animate={{ width: `${(syncProgress.current / (syncProgress.total || 1)) * 100}%` }}
-                    transition={{ type: 'spring', damping: 20 }}
-                  />
-                </div>
-             </div>
+              <div className="w-full max-w-xl mt-16 space-y-6">
+                 <div className="flex justify-between font-bold text-gray-500 mb-2 px-2">
+                   <div className="flex flex-col">
+                     <span className="uppercase text-[10px] tracking-[0.2em] mb-1">{syncMessage}</span>
+                     <span className="text-white text-lg font-mono tracking-tighter">
+                       {syncProgress.current} <span className="text-gray-600">/ {syncProgress.total}</span>
+                     </span>
+                   </div>
+                   <span className="text-blue-500 font-black text-2xl font-mono">{Math.round((syncProgress.current / (syncProgress.total || 1)) * 100)}%</span>
+                 </div>
+                 <div className="h-5 bg-white/5 rounded-full overflow-hidden border border-white/5 p-1">
+                   <motion.div 
+                     className="h-full bg-blue-600 rounded-full shadow-[0_0_30px_rgba(37,99,235,0.4)]"
+                     initial={{ width: 0 }}
+                     animate={{ width: `${(syncProgress.current / (syncProgress.total || 1)) * 100}%` }}
+                     transition={{ type: 'spring', damping: 20 }}
+                   />
+                 </div>
+                 <button 
+                  onClick={handleCancel}
+                  className="w-full py-4 text-xs font-black uppercase tracking-widest text-red-500 bg-red-500/5 hover:bg-red-500/10 border border-red-500/10 rounded-2xl transition-all flex items-center justify-center space-x-2"
+                 >
+                   <X className="w-4 h-4" />
+                   <span>Emergency Stop Sync</span>
+                 </button>
+              </div>
           )}
 
           {syncResult && (
