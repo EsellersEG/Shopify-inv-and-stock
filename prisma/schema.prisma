@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      String   @default("client") // "admin" or "client"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  stores    Store[]
+}
+
+model MasterStore {
+  id                 String   @id @default(cuid())
+  shopDomain         String   @unique
+  accessToken        String
+  spreadsheetId      String
+  serviceAccountJson String   @db.Text
+  sheetName          String   @default("Sheet1")
+  skuCol             String   @default("SKU")
+  priceCol           String   @default("Price")
+  inventoryCol       String   @default("Inventory")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  assignedTo         Store[]
+}
+
+model Store {
+  id            String      @id @default(cuid())
+  clientId      String
+  masterStoreId String
+  client        User        @relation(fields: [clientId], references: [id])
+  masterStore   MasterStore @relation(fields: [masterStoreId], references: [id])
+
+  @@unique([clientId, masterStoreId])
+}
+
+model SyncLog {
+  id           String   @id @default(cuid())
+  shopDomain   String
+  status       String   // "loading", "success", "error"
+  message      String?
+  updatedCount Int      @default(0)
+  errorCount   Int      @default(0)
+  duration     Int      @default(0)
+  logs         String[] @default([])
+  createdAt    DateTime @default(now())
+}

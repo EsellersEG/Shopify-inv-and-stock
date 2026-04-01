@@ -9,10 +9,12 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "start": "node dist/server.cjs"
+    "start": "npx prisma db push --accept-data-loss && node dist/server.cjs",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
+    "@prisma/client": "^7.6.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "bcryptjs": "^3.0.3",
@@ -24,6 +26,7 @@
     "lowdb": "^7.0.1",
     "lucide-react": "^1.7.0",
     "motion": "^12.38.0",
+    "prisma": "^7.6.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.13.2",
