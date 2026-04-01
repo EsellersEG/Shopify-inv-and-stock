@@ -322,8 +322,8 @@ async function startServer() {
         const skusArray = Array.from(new Set(rows.slice(1).map(r => r[skuIndex]).filter(Boolean)));
         const shopifyVariants = new Map<string, any>();
 
-        // Fetching Shopify Variants (Optimized)
-        updateSyncSession(shopDomain, { type: 'progress', current: 0, total: totalRows, message: 'Fetching Shopify products...' });
+        // Phase 1: Fetching
+        updateSyncSession(shopDomain, { type: 'progress', current: 0, total: totalRows, message: 'Step 1: Analyzing Spreadsheet Data...' });
         const chunkSize = 100;
         for (let i = 0; i < skusArray.length; i += chunkSize) {
           const chunk = (skusArray as string[]).slice(i, i + chunkSize);
@@ -377,7 +377,7 @@ async function startServer() {
             hasNextPage = connection.pageInfo.hasNextPage;
             cursor = connection.pageInfo.endCursor;
           }
-          updateSyncSession(shopDomain, { type: 'progress', current: Math.min(i + chunkSize, skusArray.length), total: skusArray.length, message: `Loaded ${shopifyVariants.size} stores products...` });
+          updateSyncSession(shopDomain, { type: 'progress', current: Math.min(i + chunkSize, skusArray.length), total: skusArray.length, message: `Step 1: Fetching products in sheet...` });
         }
 
         // Compare and Batch Updates
@@ -430,7 +430,7 @@ async function startServer() {
           });
           completed += batch.length;
           updatedCount += batch.length;
-          updateSyncSession(shopDomain, { type: 'progress', current: completed, total: totalUpdates, message: `Updating Inventory...` });
+          updateSyncSession(shopDomain, { type: 'progress', current: completed, total: totalUpdates, message: `Step 2: Syncing updates to Shopify...` });
         }
 
         // Price batches of 10

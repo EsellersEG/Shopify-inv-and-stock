@@ -367,14 +367,20 @@ export default function SyncTool() {
             {syncStatus === "loading" && (
                <div className="w-full max-w-xl mt-16 space-y-4">
                   <div className="flex justify-between font-bold text-gray-500 mb-2 px-2">
-                    <span className="uppercase text-xs tracking-widest">{syncMessage}</span>
-                    <span className="text-blue-500 font-mono">{Math.round((syncProgress.current / (syncProgress.total || 1)) * 100)}%</span>
+                    <div className="flex flex-col">
+                      <span className="uppercase text-[10px] tracking-[0.2em] mb-1">{syncMessage}</span>
+                      <span className="text-white text-lg font-mono tracking-tighter">
+                        {syncProgress.current} <span className="text-gray-600">/ {syncProgress.total}</span>
+                      </span>
+                    </div>
+                    <span className="text-blue-500 font-black text-2xl font-mono">{Math.round((syncProgress.current / (syncProgress.total || 1)) * 100)}%</span>
                   </div>
-                  <div className="h-4 bg-white/5 rounded-full overflow-hidden border border-white/5">
+                  <div className="h-5 bg-white/5 rounded-full overflow-hidden border border-white/5 p-1">
                     <motion.div 
-                      className="h-full bg-blue-600 shadow-[0_0_20px_rgba(37,99,235,0.5)]"
+                      className="h-full bg-blue-600 rounded-full shadow-[0_0_30px_rgba(37,99,235,0.4)]"
                       initial={{ width: 0 }}
                       animate={{ width: `${(syncProgress.current / (syncProgress.total || 1)) * 100}%` }}
+                      transition={{ type: 'spring', damping: 20 }}
                     />
                   </div>
                </div>
