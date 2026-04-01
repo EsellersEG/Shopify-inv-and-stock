@@ -197,44 +197,47 @@ export default function SyncTool() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto pb-20">
+    <div className="max-w-6xl mx-auto pb-20 bg-white">
       <header className="flex items-center justify-between mb-12">
         <div>
-          <h1 className="text-4xl font-bold text-white tracking-tight">Inventory Bridge</h1>
-          <p className="text-gray-500 mt-2 font-medium">Automatic Stock & Price reconciliation for {shopDomain || 'your store'}</p>
+          <h1 className="text-4xl font-black text-black tracking-tight uppercase italic underline decoration-[#FFA500] underline-offset-8">Inventory Bridge</h1>
+          <p className="text-gray-500 mt-4 font-bold uppercase text-[10px] tracking-widest leading-relaxed">Automatic Stock & Price reconciliation for <span className="text-black italic font-black">{shopDomain || 'your store'}</span></p>
         </div>
         <div className="flex items-center space-x-4">
-          <select 
-            className="bg-[#141414] border border-white/10 rounded-2xl px-4 py-3 text-white outline-none focus:ring-2 focus:ring-blue-500/50 min-w-[200px]"
-            value={selectedStoreId}
-            onChange={(e) => {
-              const s = stores.find(st => st.id === e.target.value);
-              if (s) applyStore(s);
-            }}
-          >
-            {stores.map(s => <option key={s.id} value={s.id}>{s.shopDomain}</option>)}
-          </select>
+          <div className="relative group">
+            <Store className="absolute left-4 top-4 w-4 h-4 text-gray-300 group-focus-within:text-[#FFA500] transition-colors" />
+            <select 
+              className="bg-gray-50 border border-gray-100 rounded-2xl pl-12 pr-6 py-4 text-black font-bold outline-none focus:ring-2 focus:ring-[#FFA500]/50 min-w-[240px] appearance-none cursor-pointer hover:bg-gray-100 transition-all shadow-sm"
+              value={selectedStoreId}
+              onChange={(e) => {
+                const s = stores.find(st => st.id === e.target.value);
+                if (s) applyStore(s);
+              }}
+            >
+              {stores.map(s => <option key={s.id} value={s.id} className="bg-white">{s.name || s.shopDomain}</option>)}
+            </select>
+          </div>
         </div>
       </header>
 
-      {/* Removed Tabs to consolidate configuration into Store DB */}
-
-      <div className="bg-[#141414] rounded-[2.5rem] border border-white/10 overflow-hidden shadow-2xl backdrop-blur-xl">
+      <div className="bg-gray-50 rounded-[3rem] border border-gray-100 overflow-hidden shadow-2xl backdrop-blur-xl relative">
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#FFA500]/20 to-transparent" />
+        
         <div className="p-16 flex flex-col items-center">
           <motion.div 
             animate={syncStatus === "loading" ? { rotate: 360 } : {}}
             transition={syncStatus === "loading" ? { repeat: Infinity, duration: 10, ease: "linear" } : {}}
-            className="bg-blue-600/10 p-10 rounded-[3rem] mb-10 border border-blue-500/10"
+            className="bg-white p-12 rounded-[3.5rem] mb-12 border border-orange-100 shadow-xl shadow-orange-500/5 ring-1 ring-orange-500/10"
           >
-            <RefreshCw className={`w-20 h-20 text-blue-500 ${syncStatus === "loading" ? "animate-spin-slow" : ""}`} />
+            <RefreshCw className={`w-24 h-24 text-[#FFA500] ${syncStatus === "loading" ? "animate-spin-slow" : ""}`} />
           </motion.div>
 
-          <h2 className="text-4xl font-black text-white mb-4">Execute Sync</h2>
-          <p className="text-gray-500 max-w-sm text-center mb-12 text-sm font-medium">
-            Ready to synchronize <b>{shopDomain}</b> credentials and mapping set in the master database.
+          <h2 className="text-4xl font-black text-black mb-4 uppercase italic">Execute Sync</h2>
+          <p className="text-gray-500 max-w-sm text-center mb-16 text-[11px] font-bold uppercase tracking-widest leading-relaxed">
+            Ready to synchronize <span className="text-[#FFA500] italic">"{shopDomain}"</span> credentials and mapping set in the master database.
           </p>
 
-          <div className="grid grid-cols-3 gap-6 mb-12 w-full max-w-xl">
+          <div className="grid grid-cols-3 gap-6 mb-16 w-full max-w-xl">
             {[
               { id: 'both', name: 'Price & Stock' },
               { id: 'stock', name: 'Stock Only' },
@@ -243,10 +246,10 @@ export default function SyncTool() {
               <button
                 key={mode.id}
                 onClick={() => setSyncMode(mode.id as any)}
-                className={`py-4 rounded-2xl font-bold border-2 transition-all ${
+                className={`py-5 rounded-2xl font-black text-xs uppercase tracking-widest border-2 transition-all ${
                   syncMode === mode.id 
-                  ? "bg-blue-600 border-blue-600 text-white shadow-xl shadow-blue-600/20" 
-                  : "border-white/5 text-gray-500 hover:border-white/10"
+                  ? "bg-[#FFA500] border-[#FFA500] text-white shadow-2xl shadow-orange-500/20 italic" 
+                  : "bg-white border-gray-100 text-gray-400 hover:border-[#FFA500] hover:text-[#FFA500]"
                 }`}
               >
                 {mode.name}
@@ -257,26 +260,26 @@ export default function SyncTool() {
           <button
              onClick={handleSync}
              disabled={syncStatus === "loading"}
-             className="w-full max-w-md py-6 bg-white text-black font-black text-xl rounded-2xl hover:bg-gray-200 disabled:opacity-50 transition-all flex items-center justify-center space-x-4 shadow-2l"
+             className="w-full max-w-md py-8 bg-[#FFA500] hover:bg-orange-600 text-white font-black text-xs rounded-2xl disabled:opacity-50 transition-all flex items-center justify-center space-x-4 shadow-2xl shadow-orange-500/30 uppercase tracking-[0.2em] italic"
           >
-            {syncStatus === "loading" ? <RefreshCw className="w-6 h-6 animate-spin" /> : <Play className="w-6 h-6 fill-black" />}
-            <span>{syncStatus === "loading" ? "Operation Running" : "Start Sync"}</span>
+            {syncStatus === "loading" ? <RefreshCw className="w-6 h-6 animate-spin" /> : <Play className="w-6 h-6 fill-white" />}
+            <span>{syncStatus === "loading" ? "Operation Running" : "Ignite Synchronisation"}</span>
           </button>
 
           {syncStatus === "loading" && (
-              <div className="w-full max-w-xl mt-16 space-y-6">
-                 <div className="flex justify-between font-bold text-gray-500 mb-2 px-2">
+              <div className="w-full max-w-xl mt-20 space-y-8">
+                 <div className="flex justify-between font-black text-gray-400 mb-2 px-2">
                    <div className="flex flex-col">
-                     <span className="uppercase text-[10px] tracking-[0.2em] mb-1">{syncMessage}</span>
-                     <span className="text-white text-lg font-mono tracking-tighter">
-                       {syncProgress.current} <span className="text-gray-600">/ {syncProgress.total}</span>
+                     <span className="uppercase text-[10px] tracking-[0.3em] mb-2 italic text-[#FFA500]">{syncMessage}</span>
+                     <span className="text-black text-3xl font-black tracking-tighter italic">
+                       {syncProgress.current} <span className="text-gray-200">/ {syncProgress.total}</span>
                      </span>
                    </div>
-                   <span className="text-blue-500 font-black text-2xl font-mono">{Math.round((syncProgress.current / (syncProgress.total || 1)) * 100)}%</span>
+                   <span className="text-black font-black text-4xl italic">{Math.round((syncProgress.current / (syncProgress.total || 1)) * 100)}%</span>
                  </div>
-                 <div className="h-5 bg-white/5 rounded-full overflow-hidden border border-white/5 p-1">
+                 <div className="h-6 bg-white rounded-full overflow-hidden border border-gray-100 p-1.5 shadow-inner">
                    <motion.div 
-                     className="h-full bg-blue-600 rounded-full shadow-[0_0_30px_rgba(37,99,235,0.4)]"
+                     className="h-full bg-gradient-to-r from-[#FFA500] to-orange-400 rounded-full shadow-[0_0_40px_rgba(255,165,0,0.4)]"
                      initial={{ width: 0 }}
                      animate={{ width: `${(syncProgress.current / (syncProgress.total || 1)) * 100}%` }}
                      transition={{ type: 'spring', damping: 20 }}
@@ -284,7 +287,7 @@ export default function SyncTool() {
                  </div>
                  <button 
                   onClick={handleCancel}
-                  className="w-full py-4 text-xs font-black uppercase tracking-widest text-red-500 bg-red-500/5 hover:bg-red-500/10 border border-red-500/10 rounded-2xl transition-all flex items-center justify-center space-x-2"
+                  className="w-full py-5 text-[10px] font-black uppercase tracking-[0.3em] text-red-500 bg-red-50 hover:bg-red-500 hover:text-white border border-red-100 rounded-2xl transition-all shadow-xl shadow-red-500/5 flex items-center justify-center space-x-3 italic"
                  >
                    <X className="w-4 h-4" />
                    <span>Emergency Stop Sync</span>
@@ -296,34 +299,37 @@ export default function SyncTool() {
              <motion.div 
                initial={{ opacity: 0, scale: 0.9 }}
                animate={{ opacity: 1, scale: 1 }}
-               className="grid grid-cols-2 gap-6 w-full max-w-xl mt-16"
+               className="grid grid-cols-2 gap-6 w-full max-w-xl mt-20"
               >
-                <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-[2rem] p-8 text-center backdrop-blur-xl">
-                  <p className="text-5xl font-black text-emerald-500 mb-2">{syncResult.updated}</p>
-                  <p className="text-gray-500 font-bold uppercase text-xs tracking-widest">Successful Pulses</p>
+                <div className="bg-white border border-emerald-100 rounded-[2.5rem] p-10 text-center shadow-xl shadow-emerald-500/5">
+                  <p className="text-6xl font-black text-emerald-500 mb-3 italic">{syncResult.updated}</p>
+                  <p className="text-gray-400 font-black uppercase text-[10px] tracking-[0.2em]">Successful Pulses</p>
                 </div>
-                <div className="bg-red-500/5 border border-red-500/20 rounded-[2rem] p-8 text-center backdrop-blur-xl">
-                  <p className="text-5xl font-black text-red-500 mb-2">{syncResult.errors}</p>
-                  <p className="text-gray-500 font-bold uppercase text-xs tracking-widest">Blocked items</p>
+                <div className="bg-white border border-red-100 rounded-[2.5rem] p-10 text-center shadow-xl shadow-red-500/5">
+                  <p className="text-6xl font-black text-red-500 mb-3 italic">{syncResult.errors}</p>
+                  <p className="text-gray-400 font-black uppercase text-[10px] tracking-[0.2em]">Blocked items</p>
                 </div>
              </motion.div>
           )}
 
           {logs.length > 0 && (
-            <div className="mt-16 w-full max-w-4xl bg-[#0d0d0d] rounded-[2.5rem] border border-white/5 p-8 relative overflow-hidden group">
-               <div className="flex items-center justify-between mb-6">
-                  <h4 className="text-gray-500 font-black uppercase text-xs tracking-[0.3em]">Pipeline Terminal Log</h4>
-                  <Database className="w-4 h-4 text-gray-800" />
+            <div className="mt-20 w-full max-w-4xl bg-white rounded-[3rem] border border-gray-100 p-10 relative overflow-hidden group shadow-2xl">
+               <div className="flex items-center justify-between mb-8 border-b border-gray-50 pb-6">
+                  <h4 className="text-black font-black uppercase text-xs tracking-[0.4em] italic underline decoration-[#FFA500] decoration-2 underline-offset-8">Pipeline Terminal Log</h4>
+                  <div className="flex items-center space-x-2">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-[10px] font-black text-emerald-500 uppercase">Live Feed</span>
+                  </div>
                </div>
-               <div className="max-h-60 overflow-y-auto space-y-2 font-mono text-sm pr-4 scrollbar-hide">
+               <div className="max-h-72 overflow-y-auto space-y-3 font-mono text-xs pr-6 scrollbar-hide">
                   {logs.map((log, i) => (
-                    <div key={i} className="flex space-x-4 p-2 rounded-lg hover:bg-white/5 transition-colors border-l-2 border-transparent hover:border-blue-500">
-                      <span className="text-gray-700 select-none">[{i.toString().padStart(3, '0')}]</span>
-                      <span className="text-gray-300">{log}</span>
+                    <div key={i} className="flex space-x-6 p-3 rounded-2xl hover:bg-gray-50 transition-all border-l-4 border-transparent hover:border-[#FFA500] group/log shadow-sm hover:shadow-md">
+                      <span className="text-gray-300 select-none font-bold uppercase transition-colors group-hover/log:text-[#FFA500]/50 tracking-tighter">LINE-{i.toString().padStart(3, '0')}</span>
+                      <span className="text-gray-600 font-medium leading-relaxed">{log}</span>
                     </div>
                   ))}
                </div>
-               <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[#0d0d0d] pointer-events-none" />
+               <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-white pointer-events-none" />
             </div>
           )}
         </div>

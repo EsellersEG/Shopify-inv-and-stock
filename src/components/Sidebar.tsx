@@ -14,25 +14,25 @@ export default function Sidebar({ user, onLogout }: { user: any, onLogout: () =>
   ];
 
   return (
-    <aside className="w-72 bg-[#0d0d0d] border-r border-white/5 flex flex-col h-screen sticky top-0">
+    <aside className="w-72 bg-white border-r border-gray-100 flex flex-col h-screen sticky top-0 shadow-sm">
       <div className="p-8">
-        <div className="flex items-center space-x-3 mb-10">
-          <div className="bg-blue-600 p-2 rounded-xl">
+        <div className="flex items-center space-x-3 mb-12">
+          <div className="bg-[#FFA500] p-2 rounded-xl shadow-lg shadow-orange-500/20">
             <RefreshCw className="w-6 h-6 text-white" />
           </div>
-          <span className="text-xl font-bold text-white tracking-tight">SyncFlow</span>
+          <span className="text-2xl font-black text-black tracking-tighter uppercase italic">SyncFlow</span>
         </div>
 
-        <nav className="space-y-1.5">
+        <nav className="space-y-2">
           {navItems.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
               className={({ isActive }) =>
-                `flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 group ${
+                `flex items-center space-x-4 px-5 py-4 rounded-2xl transition-all duration-300 group text-xs uppercase tracking-widest font-black ${
                   isActive 
-                    ? 'bg-blue-600/10 text-blue-500 font-semibold' 
-                    : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                    ? 'bg-black text-white shadow-xl shadow-black/10 italic' 
+                    : 'text-gray-400 hover:bg-gray-50 hover:text-black'
                 }`
               }
             >
@@ -44,21 +44,21 @@ export default function Sidebar({ user, onLogout }: { user: any, onLogout: () =>
       </div>
 
       <div className="mt-auto p-6 space-y-4">
-        <div className="bg-[#141414] rounded-2xl p-4 border border-white/5">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-600 to-blue-400 flex items-center justify-center text-white font-bold">
+        <div className="bg-gray-50 rounded-[1.5rem] p-5 border border-gray-100 transition-all hover:shadow-inner">
+          <div className="flex items-center space-x-4">
+            <div className="w-12 h-12 rounded-2xl bg-[#FFA500] flex items-center justify-center text-white font-black text-lg shadow-lg shadow-orange-500/10 italic">
               {user?.name?.[0] || 'U'}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-white truncate">{user?.name}</p>
-              <p className="text-xs text-gray-500 truncate uppercase tracking-tighter">{user?.role}</p>
+              <p className="text-sm font-black text-black truncate">{user?.name}</p>
+              <p className="text-[9px] text-gray-400 truncate uppercase tracking-[0.2em] font-bold">{user?.role}</p>
             </div>
           </div>
         </div>
 
         <button
           onClick={onLogout}
-          className="w-full flex items-center justify-center space-x-2 px-4 py-3 rounded-xl bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all duration-200 font-medium"
+          className="w-full flex items-center justify-center space-x-3 px-6 py-4 rounded-2xl bg-red-50 text-red-500 hover:bg-red-500 hover:text-white transition-all duration-300 font-black text-[10px] uppercase tracking-widest italic"
         >
           <LogOut className="w-5 h-5" />
           <span>Sign Out</span>

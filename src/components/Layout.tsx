@@ -4,9 +4,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 export default function Layout({ children, user, onLogout }: { children: React.ReactNode, user: any, onLogout: () => void }) {
   return (
-    <div className="flex min-h-screen bg-[#0a0a0a] text-white selection:bg-blue-500/30">
+    <div className="flex min-h-screen bg-white text-black selection:bg-[#FFA500]/30 font-sans antialiased">
       <Sidebar user={user} onLogout={onLogout} />
-      <main className="flex-1 p-10 overflow-y-auto">
+      <main className="flex-1 p-12 overflow-y-auto bg-white">
         <AnimatePresence mode="wait">
           <motion.div
             key={window.location.pathname}
