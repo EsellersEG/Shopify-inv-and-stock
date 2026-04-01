@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "npx prisma generate && vite build && esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist/server.cjs --external:express --external:cors --external:googleapis --external:dotenv --external:vite --external:@prisma/client --format=cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist/server.cjs --external:express --external:cors --external:googleapis --external:dotenv --external:vite --external:@prisma/client --external:bcryptjs --external:jsonwebtoken --format=cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
