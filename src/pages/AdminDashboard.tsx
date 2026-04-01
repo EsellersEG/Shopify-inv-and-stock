@@ -18,7 +18,10 @@ export default function AdminDashboard() {
     accessToken: '',
     spreadsheetId: '',
     serviceAccountJson: '',
-    sheetName: 'Sheet1'
+    sheetName: 'Sheet1',
+    skuCol: 'SKU',
+    priceCol: 'Price',
+    inventoryCol: 'Inventory'
   });
 
   const [selectedClient, setSelectedClient] = useState<any>(null);
@@ -62,7 +65,7 @@ export default function AdminDashboard() {
       if (res.id || res.success) {
         setShowAddMasterStore(false);
         setEditingStoreId(null);
-        setNewMasterStore({ shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1' });
+        setNewMasterStore({ shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', inventoryCol: 'Inventory' });
         fetchData();
       }
     } catch (err) {
@@ -79,7 +82,10 @@ export default function AdminDashboard() {
       accessToken: store.access_token,
       spreadsheetId: store.spreadsheet_id,
       serviceAccountJson: store.service_account_json,
-      sheetName: store.sheet_name || 'Sheet1'
+      sheetName: store.sheet_name || 'Sheet1',
+      skuCol: store.sku_col || 'SKU',
+      priceCol: store.price_col || 'Price',
+      inventoryCol: store.inventory_col || 'Inventory'
     });
     setShowAddMasterStore(true);
   };
@@ -118,7 +124,7 @@ export default function AdminDashboard() {
            <button
             onClick={() => {
               setEditingStoreId(null);
-              setNewMasterStore({ shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1' });
+              setNewMasterStore({ shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', inventoryCol: 'Inventory' });
               setShowAddMasterStore(true);
             }}
             className="flex items-center space-x-2 bg-white/5 hover:bg-white/10 text-white px-6 py-3.5 rounded-2xl font-semibold border border-white/5 transition-all text-sm"
@@ -425,8 +431,43 @@ export default function AdminDashboard() {
                           onChange={(e) => setNewMasterStore({ ...newMasterStore, sheetName: e.target.value })}
                         />
                      </div>
-                     <div className="col-span-full">
-                        <label className="block text-[10px] font-black text-gray-500 uppercase tracking-[0.2em] mb-3 ml-1">Service Account JSON</label>
+                      <div className="col-span-full border-t border-white/5 pt-6 mt-4">
+                         <label className="block text-[10px] font-black text-blue-500 uppercase tracking-[0.2em] mb-6 ml-1">Field Mapping (Column Names in Sheet)</label>
+                         <div className="grid grid-cols-3 gap-4">
+                            <div>
+                               <label className="block text-[10px] font-bold text-gray-600 uppercase tracking-widest mb-3">SKU Column</label>
+                               <input
+                                 type="text"
+                                 required
+                                 className="w-full bg-[#141414] border border-white/5 rounded-xl p-4 text-white placeholder-gray-800 outline-none focus:ring-2 focus:ring-blue-500 font-bold transition-all text-sm"
+                                 value={newMasterStore.skuCol}
+                                 onChange={(e) => setNewMasterStore({ ...newMasterStore, skuCol: e.target.value })}
+                               />
+                            </div>
+                            <div>
+                               <label className="block text-[10px] font-bold text-gray-600 uppercase tracking-widest mb-3">Price Column</label>
+                               <input
+                                 type="text"
+                                 required
+                                 className="w-full bg-[#141414] border border-white/5 rounded-xl p-4 text-white placeholder-gray-800 outline-none focus:ring-2 focus:ring-blue-500 font-bold transition-all text-sm"
+                                 value={newMasterStore.priceCol}
+                                 onChange={(e) => setNewMasterStore({ ...newMasterStore, priceCol: e.target.value })}
+                               />
+                            </div>
+                            <div>
+                               <label className="block text-[10px] font-bold text-gray-600 uppercase tracking-widest mb-3">Inventory Column</label>
+                               <input
+                                 type="text"
+                                 required
+                                 className="w-full bg-[#141414] border border-white/5 rounded-xl p-4 text-white placeholder-gray-800 outline-none focus:ring-2 focus:ring-blue-500 font-bold transition-all text-sm"
+                                 value={newMasterStore.inventoryCol}
+                                 onChange={(e) => setNewMasterStore({ ...newMasterStore, inventoryCol: e.target.value })}
+                               />
+                            </div>
+                         </div>
+                      </div>
+                      <div className="col-span-full border-t border-white/5 pt-6 mt-4">
+                         <label className="block text-[10px] font-black text-gray-500 uppercase tracking-[0.2em] mb-3 ml-1">Service Account JSON</label>
                         <div className="relative">
                             <FileJson className="absolute left-5 top-5 w-5 h-5 text-gray-700" />
                             <textarea
