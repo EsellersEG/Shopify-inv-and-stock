@@ -415,42 +415,75 @@ async function startServer() {
            return updateSyncSession(shopDomain, { type: 'complete', updatedCount: 0, errorCount, logs, duration: Date.now() - startTime });
         }
 
-        // Execute Batch Updates
+        // Execute Batch Updates (Ultra-Fast Parallelized Batches)
         let completed = 0;
-        // Inventory batches of 100
-        for (let i = 0; i < inventoryUpdates.length; i += 100) {
-          const batch = inventoryUpdates.slice(i, i + 100);
-          const mutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
-          const variables = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: batch.map(u => ({ inventoryItemId: u.inventoryItemId, locationId: u.locationId, quantity: u.quantity })) } };
-          
-          await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
-            method: "POST",
-            headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-            body: JSON.stringify({ query: mutation, variables }),
-          });
-          completed += batch.length;
-          updatedCount += batch.length;
-          updateSyncSession(shopDomain, { type: 'progress', current: completed, total: totalUpdates, message: `Step 2: Syncing updates to Shopify...` });
+        
+        // 1. Optimized Inventory Updates (Batches of 100 - Shopify's Max)
+        if (inventoryUpdates.length > 0) {
+          const batchSize = 100;
+          for (let i = 0; i < inventoryUpdates.length; i += batchSize) {
+            const batch = inventoryUpdates.slice(i, i + batchSize);
+            const mutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
+            const variables = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: batch.map(u => ({ inventoryItemId: u.inventoryItemId, locationId: u.locationId, quantity: u.quantity })) } };
+            
+            const gqlRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
+              method: "POST",
+              headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
+              body: JSON.stringify({ query: mutation, variables }),
+            });
+
+            if (gqlRes.ok) {
+              const data = await gqlRes.json();
+              const throttle = data.extensions?.cost?.throttleStatus;
+              
+              // Dynamic Throttling: If we have plenty of points, keep going. If low, wait briefly.
+              if (throttle && throttle.currentlyAvailable < (throttle.maximumAvailable * 0.2)) {
+                await new Promise(resolve => setTimeout(resolve, 800)); // Cool down
+              }
+            }
+
+            completed += batch.length;
+            updatedCount += batch.length;
+            updateSyncSession(shopDomain, { type: 'progress', current: completed, total: totalUpdates, message: `Step 2: Syncing updates to Shopify...` });
+          }
         }
 
-        // Price batches of 10
-        for (let i = 0; i < priceUpdates.length; i += 10) {
-          const batch = priceUpdates.slice(i, i + 10);
-          let mutation = `mutation {`;
-          batch.forEach((u, index) => { mutation += `v${index}: productVariantUpdate(input: {id: "${u.id}", price: "${u.price}"}) { userErrors { message } }`; });
-          mutation += `}`;
-          
-          await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
-            method: "POST",
-            headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-            body: JSON.stringify({ query: mutation }),
-          });
-          completed += batch.length;
-          updatedCount += batch.length;
-          updateSyncSession(shopDomain, { type: 'progress', current: completed, total: totalUpdates, message: `Updating Prices...` });
+        // 2. Optimized Price Updates (Increased batch size to 50 via Aliases)
+        if (priceUpdates.length > 0) {
+          const priceBatchSize = 50; 
+          for (let i = 0; i < priceUpdates.length; i += priceBatchSize) {
+            const batch = priceUpdates.slice(i, i + priceBatchSize);
+            let mutation = `mutation {`;
+            batch.forEach((u, index) => { 
+                mutation += `v${index}: productVariantUpdate(input: {id: "${u.id}", price: "${u.price}"}) { userErrors { message } }`; 
+            });
+            mutation += `}`;
+            
+            const gqlRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
+              method: "POST",
+              headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
+              body: JSON.stringify({ query: mutation }),
+            });
+
+            if (gqlRes.ok) {
+              const data = await gqlRes.json();
+              const throttle = data.extensions?.cost?.throttleStatus;
+              
+              // Aggressive dynamic cooling: only wait if we are hitting the ceiling
+              if (throttle && throttle.currentlyAvailable < (throttle.maximumAvailable * 0.15)) {
+                const sleepTime = Math.ceil((throttle.restoreRate || 50) * 2);
+                await new Promise(resolve => setTimeout(resolve, sleepTime)); 
+              }
+            }
+
+            completed += batch.length;
+            updatedCount += batch.length;
+            updateSyncSession(shopDomain, { type: 'progress', current: completed, total: totalUpdates, message: `Step 2: Syncing updates to Shopify...` });
+          }
         }
 
-        updateSyncSession(shopDomain, { type: 'complete', updatedCount, errorCount, logs, duration: Date.now() - startTime });
+        const durationInMs = Date.now() - startTime;
+        updateSyncSession(shopDomain, { type: 'complete', updatedCount, errorCount, logs, duration: durationInMs });
       } catch (err: any) {
         updateSyncSession(shopDomain, { type: 'error', message: err.message });
       }
