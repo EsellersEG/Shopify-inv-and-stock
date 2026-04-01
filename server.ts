@@ -42,6 +42,7 @@ async function initDatabase() {
 
     CREATE TABLE IF NOT EXISTS master_stores (
       id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT 'Unlabeled Store',
       shop_domain TEXT UNIQUE NOT NULL,
       access_token TEXT NOT NULL,
       spreadsheet_id TEXT NOT NULL,
@@ -73,6 +74,14 @@ async function initDatabase() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  
+  // Migration: Add name column to master_stores if it doesn't exist
+  try {
+    await pool.query("ALTER TABLE master_stores ADD COLUMN IF NOT EXISTS name TEXT DEFAULT 'Unlabeled Store'");
+  } catch (e) {
+    console.error("Migration failed or column already exists:", e);
+  }
+
   console.log("Database tables ready.");
 }
 
@@ -170,15 +179,14 @@ async function startServer() {
     res.json(rows);
   });
 
-  // Admin: Register Master Store
   app.post("/api/admin/master-stores", authenticateToken, isAdmin, async (req: Request, res: Response) => {
-    const { shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, inventoryCol } = req.body;
+    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, inventoryCol } = req.body;
     try {
       const id = randomUUID();
       const { rows } = await pool.query(
-        `INSERT INTO master_stores (id, shop_domain, access_token, spreadsheet_id, service_account_json, sheet_name, sku_col, price_col, inventory_col)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-        [id, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", inventoryCol || "Inventory"]
+        `INSERT INTO master_stores (id, name, shop_domain, access_token, spreadsheet_id, service_account_json, sheet_name, sku_col, price_col, inventory_col)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+        [id, name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", inventoryCol || "Inventory"]
       );
       res.json(rows[0]);
     } catch (e: any) {
@@ -189,13 +197,13 @@ async function startServer() {
   // Admin: Update Master Store
   app.put("/api/admin/master-stores/:id", authenticateToken, isAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
-    const { shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, inventoryCol } = req.body;
+    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, inventoryCol } = req.body;
     try {
       const { rows } = await pool.query(
         `UPDATE master_stores 
-         SET shop_domain = $1, access_token = $2, spreadsheet_id = $3, service_account_json = $4, sheet_name = $5, sku_col = $6, price_col = $7, inventory_col = $8, updated_at = NOW()
-         WHERE id = $9 RETURNING *`,
-        [shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", inventoryCol || "Inventory", id]
+         SET name = $1, shop_domain = $2, access_token = $3, spreadsheet_id = $4, service_account_json = $5, sheet_name = $6, sku_col = $7, price_col = $8, inventory_col = $9, updated_at = NOW()
+         WHERE id = $10 RETURNING *`,
+        [name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", inventoryCol || "Inventory", id]
       );
       if (rows.length === 0) return res.status(404).json({ error: "Store not found" });
       res.json(rows[0]);

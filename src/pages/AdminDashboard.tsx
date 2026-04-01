@@ -14,6 +14,7 @@ export default function AdminDashboard() {
   
   const [showAddMasterStore, setShowAddMasterStore] = useState(false);
   const [newMasterStore, setNewMasterStore] = useState({
+    name: '',
     shopDomain: '',
     accessToken: '',
     spreadsheetId: '',
@@ -47,7 +48,7 @@ export default function AdminDashboard() {
   const handleAddClient = async (e: React.FormEvent) => {
     e.preventDefault();
     const res = await api.post('/api/admin/clients', newClient);
-    if (res.success) {
+    if (res.id) {
       setShowAddClient(false);
       setNewClient({ name: '', email: '', password: '' });
       fetchData();
@@ -65,7 +66,7 @@ export default function AdminDashboard() {
       if (res.id || res.success) {
         setShowAddMasterStore(false);
         setEditingStoreId(null);
-        setNewMasterStore({ shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', inventoryCol: 'Inventory' });
+        setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', inventoryCol: 'Inventory' });
         fetchData();
       }
     } catch (err) {
@@ -78,7 +79,8 @@ export default function AdminDashboard() {
   const handleEditStore = (store: any) => {
     setEditingStoreId(store.id);
     setNewMasterStore({
-      shopDomain: store.shopDomain,
+      name: store.name || '',
+      shopDomain: store.shop_domain,
       accessToken: store.access_token,
       spreadsheetId: store.spreadsheet_id,
       serviceAccountJson: store.service_account_json,
@@ -124,7 +126,7 @@ export default function AdminDashboard() {
            <button
             onClick={() => {
               setEditingStoreId(null);
-              setNewMasterStore({ shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', inventoryCol: 'Inventory' });
+              setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', inventoryCol: 'Inventory' });
               setShowAddMasterStore(true);
             }}
             className="flex items-center space-x-2 bg-white/5 hover:bg-white/10 text-white px-6 py-3.5 rounded-2xl font-semibold border border-white/5 transition-all text-sm"
@@ -265,10 +267,11 @@ export default function AdminDashboard() {
                     </div>
                 </div>
                 <div>
-                   <h3 className="text-xl font-black text-white truncate">{store.shopDomain}</h3>
-                   <div className="flex items-center space-x-2 mt-2">
+                   <h3 className="text-xl font-black text-white truncate">{store.name || 'Unlabeled Store'}</h3>
+                   <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mt-1">{store.shop_domain}</p>
+                   <div className="flex items-center space-x-2 mt-3">
                       <Database className="w-3.5 h-3.5 text-gray-600" />
-                      <p className="text-xs text-gray-600 font-mono truncate">{store.spreadsheetId}</p>
+                      <p className="text-xs text-gray-600 font-mono truncate">{store.spreadsheet_id}</p>
                    </div>
                 </div>
                 <div className="pt-4 border-t border-white/5 flex items-center justify-between">
@@ -376,8 +379,22 @@ export default function AdminDashboard() {
                   {editingStoreId ? 'Update Existing Shopify Configuration' : 'Register New Shopify Integrity Point'}
                </p>
 
-               <form onSubmit={handleAddMasterStore} className="space-y-6">
+                <form onSubmit={handleAddMasterStore} className="space-y-6">
                   <div className="grid grid-cols-2 gap-6">
+                     <div className="col-span-full">
+                        <label className="block text-[10px] font-black text-gray-500 uppercase tracking-[0.2em] mb-3 ml-1">Store Name (Internal)</label>
+                        <div className="relative">
+                            <Store className="absolute left-5 top-5 w-5 h-5 text-gray-700" />
+                            <input
+                              type="text"
+                              required
+                              className="w-full bg-[#141414] border border-white/5 rounded-2xl p-5 pl-14 text-white placeholder-gray-800 outline-none focus:ring-2 focus:ring-blue-500 font-bold transition-all"
+                              placeholder="e.g. Mira Medical - Warehouse A"
+                              value={newMasterStore.name}
+                              onChange={(e) => setNewMasterStore({ ...newMasterStore, name: e.target.value })}
+                            />
+                        </div>
+                     </div>
                      <div className="col-span-full">
                         <label className="block text-[10px] font-black text-gray-500 uppercase tracking-[0.2em] mb-3 ml-1">Shopify Domain</label>
                         <div className="relative">
@@ -532,7 +549,7 @@ export default function AdminDashboard() {
                   >
                     <option value="" className="bg-[#0a0a0a]">-- Select Saved Store --</option>
                     {masterStores.map((ms) => (
-                      <option key={ms.id} value={ms.id} className="bg-[#0a0a0a]">{ms.shopDomain}</option>
+                      <option key={ms.id} value={ms.id} className="bg-[#0a0a0a]">{ms.name} ({ms.shop_domain})</option>
                     ))}
                   </select>
                   {masterStores.length === 0 && (
@@ -548,7 +565,10 @@ export default function AdminDashboard() {
                     <div className="grid gap-2">
                       {selectedClient.stores.map((s: any, i: number) => (
                         <div key={i} className="flex items-center justify-between p-4 bg-white/5 border border-white/5 rounded-2xl">
-                          <span className="text-gray-400 font-bold text-xs">{s.shopDomain}</span>
+                          <div className="flex flex-col">
+                            <span className="text-white font-black text-xs italic">{s.name || 'Unlabeled Store'}</span>
+                            <span className="text-gray-600 font-bold text-[9px] uppercase tracking-tighter mt-1">{s.shop_domain}</span>
+                          </div>
                           <ShieldCheck className="w-4 h-4 text-emerald-500/50" />
                         </div>
                       ))}
