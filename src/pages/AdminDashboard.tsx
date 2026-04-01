@@ -347,7 +347,7 @@ export default function AdminDashboard() {
                   <button
                     type="button"
                     onClick={() => setShowAddClient(false)}
-                    className="flex-1 py-5 px-8 bg-black text-white font-black rounded-2xl transition-all uppercase text-xs tracking-widest hover:bg-[#FFA500]"
+                    className="flex-1 py-5 px-8 bg-white border border-gray-200 text-black font-black rounded-2xl transition-all uppercase text-[10px] tracking-widest hover:bg-gray-50 active:scale-95"
                   >
                     Discard
                   </button>
@@ -500,7 +500,7 @@ export default function AdminDashboard() {
                     <button
                         type="button"
                         onClick={() => setShowAddMasterStore(false)}
-                        className="flex-1 py-5 px-8 bg-black text-white font-black rounded-2xl transition-all uppercase text-xs tracking-widest hover:bg-[#FFA500]"
+                        className="flex-1 py-5 px-8 bg-white border border-gray-200 text-black font-black rounded-2xl transition-all uppercase text-[10px] tracking-widest hover:bg-gray-50 active:scale-95"
                     >
                         Discard
                     </button>
@@ -578,7 +578,7 @@ export default function AdminDashboard() {
                   <button
                     type="button"
                     onClick={() => setSelectedClient(null)}
-                    className="flex-1 py-5 px-8 bg-black text-white font-black rounded-2xl transition-all uppercase text-xs tracking-widest hover:bg-[#FFA500]"
+                    className="flex-1 py-5 px-8 bg-white border border-gray-200 text-black font-black rounded-2xl transition-all uppercase text-[10px] tracking-widest hover:bg-gray-50 active:scale-95"
                   >
                     Cancel
                   </button>
