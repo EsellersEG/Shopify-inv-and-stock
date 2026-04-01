@@ -23,13 +23,12 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const JWT_SECRET = process.env.JWT_SECRET || "e-sellers-dashboard-secret-key-2024";
-
-// Database Setup
-const defaultData = { users: [], clients: [], stores: [] };
-const db = await JSONFilePreset(path.join(__dirname, "data", "db.json"), defaultData);
-
 async function startServer() {
+  // Database Setup
+  const defaultData = { users: [], clients: [], stores: [] };
+  const db = await JSONFilePreset(path.join(__dirname, "data", "db.json"), defaultData);
+  const JWT_SECRET = process.env.JWT_SECRET || "e-sellers-dashboard-secret-key-2024";
+
   const app = express();
   const PORT = process.env.PORT || 3000;
 
