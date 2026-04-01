@@ -19,8 +19,7 @@ declare global {
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = path.resolve();
 
 async function startServer() {
   // Database Setup
