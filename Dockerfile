@@ -1,5 +1,5 @@
 # Use Node 20 as the base for building
-FROM node:20@sha256:d86f7894d0758eff0e8e97c45305f631245041a9675b34f89d6e499d793f7783 as builder
+FROM node:20 as builder
 
 WORKDIR /app
 COPY package*.json ./
