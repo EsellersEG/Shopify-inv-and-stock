@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../lib/api';
-import { Plus, Users, Store, Key, ChevronRight, Mail, UserPlus, Info, Database, ShieldCheck, Globe, FileJson } from 'lucide-react';
+import { Plus, Users, Store, Key, ChevronRight, Mail, UserPlus, Info, Database, ShieldCheck, Globe, FileJson, Edit2, Trash2, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function AdminDashboard() {
@@ -23,6 +23,8 @@ export default function AdminDashboard() {
 
   const [selectedClient, setSelectedClient] = useState<any>(null);
   const [selectedMasterStoreId, setSelectedMasterStoreId] = useState('');
+  const [editingStoreId, setEditingStoreId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -51,10 +53,41 @@ export default function AdminDashboard() {
 
   const handleAddMasterStore = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await api.post('/api/admin/master-stores', newMasterStore);
+    setIsSubmitting(true);
+    try {
+      const res = editingStoreId 
+        ? await api.put(`/api/admin/master-stores/${editingStoreId}`, newMasterStore)
+        : await api.post('/api/admin/master-stores', newMasterStore);
+      
+      if (res.id || res.success) {
+        setShowAddMasterStore(false);
+        setEditingStoreId(null);
+        setNewMasterStore({ shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1' });
+        fetchData();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleEditStore = (store: any) => {
+    setEditingStoreId(store.id);
+    setNewMasterStore({
+      shopDomain: store.shopDomain,
+      accessToken: store.access_token,
+      spreadsheetId: store.spreadsheet_id,
+      serviceAccountJson: store.service_account_json,
+      sheetName: store.sheet_name || 'Sheet1'
+    });
+    setShowAddMasterStore(true);
+  };
+
+  const handleDeleteStore = async (id: string) => {
+    if (!confirm('Are you sure? This will unpin this store from all linked clients.')) return;
+    const res = await api.delete(`/api/admin/master-stores/${id}`);
     if (res.success) {
-      setShowAddMasterStore(false);
-      setNewMasterStore({ shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1' });
       fetchData();
     }
   };
@@ -83,7 +116,11 @@ export default function AdminDashboard() {
         </div>
         <div className="flex items-center space-x-3">
            <button
-            onClick={() => setShowAddMasterStore(true)}
+            onClick={() => {
+              setEditingStoreId(null);
+              setNewMasterStore({ shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1' });
+              setShowAddMasterStore(true);
+            }}
             className="flex items-center space-x-2 bg-white/5 hover:bg-white/10 text-white px-6 py-3.5 rounded-2xl font-semibold border border-white/5 transition-all text-sm"
           >
             <Database className="w-4 h-4 text-blue-500" />
@@ -205,7 +242,21 @@ export default function AdminDashboard() {
                    <div className="p-4 bg-blue-500/10 rounded-2xl">
                       <Store className="w-6 h-6 text-blue-500" />
                    </div>
-                   <span className="bg-emerald-500/10 text-emerald-500 text-[10px] font-black px-3 py-1 rounded-full tracking-widest ring-1 ring-emerald-500/20">VERIFIED</span>
+                    <div className="flex items-center space-x-2">
+                       <button 
+                         onClick={() => handleEditStore(store)}
+                         className="p-2.5 bg-white/5 hover:bg-white/10 text-blue-400 rounded-xl transition-all border border-white/5"
+                       >
+                         <Edit2 className="w-4 h-4" />
+                       </button>
+                       <button 
+                         onClick={() => handleDeleteStore(store.id)}
+                         className="p-2.5 bg-white/5 hover:bg-white/10 text-red-400 rounded-xl transition-all border border-white/5"
+                       >
+                         <Trash2 className="w-4 h-4" />
+                       </button>
+                       <span className="bg-emerald-500/10 text-emerald-500 text-[10px] font-black px-3 py-1 rounded-full tracking-widest ring-1 ring-emerald-500/20 ml-2">VERIFIED</span>
+                    </div>
                 </div>
                 <div>
                    <h3 className="text-xl font-black text-white truncate">{store.shopDomain}</h3>
@@ -314,8 +365,10 @@ export default function AdminDashboard() {
                exit={{ scale: 0.9, opacity: 0 }}
                className="bg-[#0a0a0a] border border-white/10 rounded-[3rem] w-full max-w-2xl p-12 shadow-2xl relative overflow-hidden max-h-[90vh] overflow-y-auto"
             >
-               <h2 className="text-4xl font-black text-white mb-2 italic">Store DB</h2>
-               <p className="text-gray-500 mb-10 font-bold uppercase text-xs tracking-widest">Register New Shopify Integrity Point</p>
+               <h2 className="text-4xl font-black text-white mb-2 italic">{editingStoreId ? 'Edit Store' : 'Store DB'}</h2>
+               <p className="text-gray-500 mb-10 font-bold uppercase text-xs tracking-widest">
+                  {editingStoreId ? 'Update Existing Shopify Configuration' : 'Register New Shopify Integrity Point'}
+               </p>
 
                <form onSubmit={handleAddMasterStore} className="space-y-6">
                   <div className="grid grid-cols-2 gap-6">
@@ -395,11 +448,19 @@ export default function AdminDashboard() {
                     >
                         Discard
                     </button>
-                    <button
+                     <button
                         type="submit"
-                        className="flex-2 py-5 px-12 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-600/20 uppercase text-xs tracking-widest"
+                        disabled={isSubmitting}
+                        className="flex-2 py-5 px-12 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:opacity-50 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-600/20 uppercase text-xs tracking-widest flex items-center justify-center space-x-3 cursor-pointer"
                     >
-                        Save to Database
+                        {isSubmitting ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Processing...</span>
+                          </>
+                        ) : (
+                          <span>{editingStoreId ? 'Update Database' : 'Save to Database'}</span>
+                        )}
                     </button>
                   </div>
                </form>

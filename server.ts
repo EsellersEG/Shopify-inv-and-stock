@@ -186,6 +186,35 @@ async function startServer() {
     }
   });
 
+  // Admin: Update Master Store
+  app.put("/api/admin/master-stores/:id", authenticateToken, isAdmin, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, inventoryCol } = req.body;
+    try {
+      const { rows } = await pool.query(
+        `UPDATE master_stores 
+         SET shop_domain = $1, access_token = $2, spreadsheet_id = $3, service_account_json = $4, sheet_name = $5, sku_col = $6, price_col = $7, inventory_col = $8, updated_at = NOW()
+         WHERE id = $9 RETURNING *`,
+        [shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", inventoryCol || "Inventory", id]
+      );
+      if (rows.length === 0) return res.status(404).json({ error: "Store not found" });
+      res.json(rows[0]);
+    } catch (e: any) {
+      res.status(400).json({ error: "Store update failed or domain conflict" });
+    }
+  });
+
+  // Admin: Delete Master Store
+  app.delete("/api/admin/master-stores/:id", authenticateToken, isAdmin, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    try {
+      await pool.query("DELETE FROM master_stores WHERE id = $1", [id]);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ error: "Delete failed" });
+    }
+  });
+
   // Admin: Assign Store to Client
   app.post("/api/admin/clients/:clientId/stores", authenticateToken, isAdmin, async (req: Request, res: Response) => {
     const { clientId } = req.params;
