@@ -23,8 +23,10 @@ const __dirname = path.resolve();
 
 async function startServer() {
   // Database Setup
-  const defaultData = { users: [], clients: [], stores: [] };
+  const defaultData = { users: [], clients: [], masterStores: [] };
   const db = await JSONFilePreset(path.join(__dirname, "data", "db.json"), defaultData);
+  if (!db.data.masterStores) db.data.masterStores = [];
+  await db.write();
   const JWT_SECRET = process.env.JWT_SECRET || "e-sellers-dashboard-secret-key-2024";
 
   const app = express();
@@ -108,23 +110,48 @@ async function startServer() {
     res.json({ success: true, client: newClient });
   });
 
-  // Admin: Assign Store to Client
+  // Admin: Get All Master Stores
+  app.get("/api/admin/master-stores", authenticateToken, isAdmin, (req, res) => {
+    res.json(db.data.masterStores);
+  });
+
+  // Admin: Create/Register Master Store
+  app.post("/api/admin/master-stores", authenticateToken, isAdmin, async (req, res) => {
+    const store = req.body;
+    const newMasterStore = {
+      id: `mstore-${Date.now()}`,
+      ...store
+    };
+    db.data.masterStores.push(newMasterStore);
+    await db.write();
+    res.json({ success: true, store: newMasterStore });
+  });
+
+  // Admin: Assign Store to Client (Linked to Master Store)
   app.post("/api/admin/clients/:clientId/stores", authenticateToken, isAdmin, async (req, res) => {
     const { clientId } = req.params;
-    const store = req.body; // { shopDomain, accessToken, spreadsheetId, serviceAccountJson, ... }
+    const { masterStoreId } = req.body;
     
     const client = db.data.clients.find(c => c.id === clientId);
     if (!client) return res.status(404).json({ error: "Client not found" });
 
-    const newStore = {
+    const masterStore = db.data.masterStores.find(ms => ms.id === masterStoreId);
+    if (!masterStore) return res.status(404).json({ error: "Master store not found" });
+
+    // Link the master store to the client
+    const newLink = {
       id: `store-${Date.now()}`,
-      ...store
+      masterStoreId: masterStore.id,
+      shopDomain: masterStore.shopDomain,
+      // We store the data here so the client can access it easily, 
+      // but it points back to the master store
+      ...masterStore
     };
 
-    client.stores.push(newStore);
+    client.stores.push(newLink);
     await db.write();
 
-    res.json({ success: true, store: newStore });
+    res.json({ success: true, store: newLink });
   });
 
   // Client: Get My Stores
