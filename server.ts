@@ -230,11 +230,37 @@ async function startServer() {
 
   // Client: Get My Stores
   app.get("/api/client/stores", authenticateToken, async (req: Request, res: Response) => {
+    if (req.user.role === 'admin') {
+      const { rows } = await pool.query("SELECT * FROM master_stores ORDER BY created_at DESC");
+      return res.json(rows.map(r => ({
+        id: r.id,
+        shopDomain: r.shop_domain,
+        accessToken: r.access_token,
+        spreadsheetId: r.spreadsheet_id,
+        serviceAccountJson: r.service_account_json,
+        sheet_name: r.sheet_name,
+        sku_col: r.sku_col,
+        price_col: r.price_col,
+        inventory_col: r.inventory_col,
+        created_at: r.created_at
+      })));
+    }
     const { rows } = await pool.query(
       "SELECT ms.* FROM master_stores ms JOIN store_assignments sa ON sa.master_store_id = ms.id WHERE sa.client_id = $1",
       [req.user.id]
     );
-    res.json(rows);
+    res.json(rows.map(r => ({
+      id: r.id,
+      shopDomain: r.shop_domain,
+      accessToken: r.access_token,
+      spreadsheetId: r.spreadsheet_id,
+      serviceAccountJson: r.service_account_json,
+      sheet_name: r.sheet_name,
+      sku_col: r.sku_col,
+      price_col: r.price_col,
+      inventory_col: r.inventory_col,
+      created_at: r.created_at
+    })));
   });
 
   // Background Sync Management
