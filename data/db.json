@@ -1,0 +1,19 @@
+{
+  "users": [
+    {
+      "id": "admin-1",
+      "email": "yahia@e-sellers.net",
+      "password": "$2b$10$ttwHJrTlmgIgs9hkp3sxBeShGW0IfHe1HwLybJ78dR0tZDOU.urTK",
+      "role": "admin",
+      "name": "Yahia"
+    }
+  ],
+  "clients": [
+    {
+      "id": "client-mira",
+      "userId": "admin-1",
+      "name": "Mira Medical",
+      "stores": []
+    }
+  ]
+}

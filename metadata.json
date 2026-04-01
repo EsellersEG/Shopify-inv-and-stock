@@ -1,0 +1,5 @@
+{
+  "name": "Shopify & Sheets Sync",
+  "description": "Live sync Google Sheets with your Shopify store to update stock and price.",
+  "requestFramePermissions": []
+}
