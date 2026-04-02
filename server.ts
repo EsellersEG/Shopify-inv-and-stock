@@ -347,11 +347,16 @@ async function startServer() {
         const rows = sheetRes.data.values;
         if (!rows || rows.length === 0) return await updateSyncSession(shopDomain, { type: "error", message: "No data found" });
 
-        const headers = rows[0];
+        const rawHeaders = rows[0] || [];
+        const headers = rawHeaders.map((h: any) => String(h || "").trim());
         const skuIndex = headers.indexOf(mapping.sku);
         const priceIndex = headers.indexOf(mapping.price);
         const invIndex = headers.indexOf(mapping.inventory);
-        if (skuIndex === -1) return await updateSyncSession(shopDomain, { type: "error", message: "SKU column not found" });
+        
+        console.log(`[SYNC] Headers Found:`, headers);
+        console.log(`[SYNC] Indexes: SKU=${skuIndex}, Price=${priceIndex}, Inv=${invIndex}`);
+
+        if (skuIndex === -1) return await updateSyncSession(shopDomain, { type: "error", message: `SKU column "${mapping.sku}" not found in sheet` });
 
         const shouldSyncPrice = syncMode === "price" || syncMode === "both";
         const shouldSyncStock = syncMode === "stock" || syncMode === "both";
@@ -385,14 +390,37 @@ async function startServer() {
         }
 
         const updates: any[] = [];
+        const logs: string[] = [];
+        
         for (let i = 1; i < rows.length; i++) {
-          const sku = rows[i][skuIndex];
-          const price = rows[i][priceIndex];
-          const inv = rows[i][invIndex];
+          const sku = String(rows[i][skuIndex] || "").trim();
+          if (!sku) continue;
+          
+          const sheetPriceRaw = rows[i][priceIndex];
+          const sheetInvRaw = rows[i][invIndex];
+          
           const shopify = shopifyVariants.get(sku);
           if (!shopify) continue;
-          if (shouldSyncPrice && price && parseFloat(price) !== parseFloat(shopify.price)) updates.push({ type: "price", id: shopify.variantId, value: price });
-          if (shouldSyncStock && inv && parseInt(inv) !== shopify.available) updates.push({ type: "inv", id: shopify.invId, value: parseInt(inv) });
+
+          if (shouldSyncPrice && sheetPriceRaw !== undefined && sheetPriceRaw !== "") {
+            const sheetPrice = parseFloat(String(sheetPriceRaw).replace(/[^\d.-]/g, ""));
+            const shopifyPrice = parseFloat(shopify.price);
+            
+            if (!isNaN(sheetPrice) && sheetPrice !== shopifyPrice) {
+              updates.push({ type: "price", sku, id: shopify.variantId, value: sheetPrice.toString() });
+              console.log(`[SYNC] Price Pending: SKU ${sku} -> ${shopifyPrice} to ${sheetPrice}`);
+            }
+          }
+
+          if (shouldSyncStock && sheetInvRaw !== undefined && sheetInvRaw !== "") {
+            const sheetInv = parseInt(String(sheetInvRaw).replace(/[^\d-]/g, ""));
+            const shopifyInv = shopify.available;
+            
+            if (!isNaN(sheetInv) && sheetInv !== shopifyInv) {
+              updates.push({ type: "inv", sku, id: shopify.invId, value: sheetInv });
+              console.log(`[SYNC] Stock Pending: SKU ${sku} -> ${shopifyInv} to ${sheetInv}`);
+            }
+          }
         }
 
         if (updates.length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: 0, errorCount: 0, logs: [], duration: Date.now() - startTime });
@@ -405,11 +433,20 @@ async function startServer() {
 
           if (priceBatch.length > 0) {
             let mutation = `mutation {`;
-            priceBatch.forEach((u: any, idx: number) => { mutation += `v${idx}: productVariantUpdate(input: {id: "${u.id}", price: "${u.value}"}) { userErrors { message } }`; });
+            priceBatch.forEach((u: any, idx: number) => { mutation += `v${idx}: productVariantUpdate(input: {id: "${u.id}", price: "${u.value}"}) { productVariant { sku price } userErrors { field message } }`; });
             mutation += `}`;
-            await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
+            const gqlRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
               method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
               body: JSON.stringify({ query: mutation })
+            });
+            const result = await gqlRes.json();
+            Object.keys(result.data || {}).forEach(key => {
+              const errors = result.data[key].userErrors;
+              if (errors?.length > 0) {
+                const msg = `Price Error (${priceBatch[parseInt(key.slice(1))].sku}): ${errors[0].message}`;
+                console.error(`[SYNC] ${msg}`);
+                logs.push(msg);
+              }
             });
           }
 
@@ -420,13 +457,21 @@ async function startServer() {
               method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
               body: JSON.stringify({ query: mutation, variables })
             });
+            const result = await invRes.json();
+            const errors = result.data?.inventorySetQuantities?.userErrors;
+            if (errors?.length > 0) {
+              const msg = `Inventory Error: ${errors[0].message}`;
+              console.error(`[SYNC] ${msg}`);
+              logs.push(msg);
+            }
           }
 
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(i + 50, updates.length), total: updates.length, message: `Step 2: Syncing updates to Shopify...` });
         }
 
-        await updateSyncSession(shopDomain, { type: "complete", updatedCount: updates.length, errorCount: 0, logs: [], duration: Date.now() - startTime });
+        await updateSyncSession(shopDomain, { type: "complete", updatedCount: updates.length - logs.length, errorCount: logs.length, logs, duration: Date.now() - startTime });
       } catch (err: any) {
+        console.error(`[SYNC] Global Error:`, err);
         await updateSyncSession(shopDomain, { type: "error", message: err.message });
       }
     })();
