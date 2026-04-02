@@ -103,15 +103,37 @@ export default function AdminDashboard() {
   const handleAssignStore = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedMasterStoreId) return;
-
-    const res = await api.post(`/api/admin/clients/${selectedClient.id}/stores`, {
-      masterStoreId: selectedMasterStoreId
-    });
-    
+    const res = await api.post(`/api/admin/clients/${selectedClient.id}/stores`, { masterStoreId: selectedMasterStoreId });
     if (res.success) {
-      setSelectedClient(null);
       setSelectedMasterStoreId('');
       fetchData();
+      // Update local state to reflect new assignment immediately in modal
+      const updatedClients = clients.map(c => {
+        if (c.id === selectedClient.id) {
+          const newStore = masterStores.find(ms => ms.id === selectedMasterStoreId);
+          return { ...c, stores: [...(c.stores || []), newStore] };
+        }
+        return c;
+      });
+      setClients(updatedClients);
+      setSelectedClient(updatedClients.find(c => c.id === selectedClient.id));
+    }
+  };
+
+  const handleUnassignStore = async (masterStoreId: string) => {
+    if (!confirm('Are you sure you want to unassign this store?')) return;
+    const res = await api.delete(`/api/admin/clients/${selectedClient.id}/stores/${masterStoreId}`);
+    if (res.success) {
+      fetchData();
+      // Update local state
+      const updatedClients = clients.map(c => {
+        if (c.id === selectedClient.id) {
+          return { ...c, stores: c.stores.filter((s: any) => s.id !== masterStoreId) };
+        }
+        return c;
+      });
+      setClients(updatedClients);
+      setSelectedClient(updatedClients.find(c => c.id === selectedClient.id));
     }
   };
 
@@ -567,7 +589,17 @@ export default function AdminDashboard() {
                             <span className="text-black font-black text-xs italic">{s.name || 'Unlabeled Store'}</span>
                             <span className="text-gray-600 font-bold text-[9px] uppercase tracking-tighter mt-1">{s.shop_domain}</span>
                           </div>
-                          <ShieldCheck className="w-4 h-4 text-emerald-500/50" />
+                          <div className="flex items-center space-x-2">
+                             <ShieldCheck className="w-4 h-4 text-emerald-500/50" />
+                             <button
+                               type="button"
+                               onClick={() => handleUnassignStore(s.id)}
+                               className="p-2 hover:bg-red-50 text-red-400 hover:text-red-600 rounded-xl transition-all"
+                               title="Unassign Store"
+                             >
+                               <Trash2 className="w-4 h-4" />
+                             </button>
+                          </div>
                         </div>
                       ))}
                     </div>

@@ -11,6 +11,7 @@ export default function SyncTool() {
   const [selectedStoreId, setSelectedStoreId] = useState("");
   
   // State for the sync process
+  const [storeName, setStoreName] = useState("");
   const [shopDomain, setShopDomain] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [spreadsheetId, setSpreadsheetId] = useState("");
@@ -131,6 +132,7 @@ export default function SyncTool() {
 
   const applyStore = (store: any) => {
     setSelectedStoreId(store.id);
+    setStoreName(store.name || "");
     setShopDomain(store.shopDomain);
     setAccessToken(store.accessToken);
     setSpreadsheetId(store.spreadsheetId);
@@ -234,7 +236,7 @@ export default function SyncTool() {
 
           <h2 className="text-4xl font-black text-black mb-4 uppercase italic">Execute Sync</h2>
           <p className="text-gray-500 max-w-sm text-center mb-16 text-[11px] font-bold uppercase tracking-widest leading-relaxed">
-            Ready to synchronize <span className="text-[#FFA500] italic">"{shopDomain}"</span> credentials and mapping set in the master database.
+            Ready to synchronize <span className="text-[#FFA500] italic">"{storeName || shopDomain}"</span> credentials and mapping set in the master database.
           </p>
 
           <div className="grid grid-cols-3 gap-6 mb-16 w-full max-w-xl">

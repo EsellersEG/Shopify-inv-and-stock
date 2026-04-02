@@ -236,12 +236,24 @@ async function startServer() {
     }
   });
 
+  // Admin: Unassign Store
+  app.delete("/api/admin/clients/:clientId/stores/:masterStoreId", authenticateToken, isAdmin, async (req: Request, res: Response) => {
+    const { clientId, masterStoreId } = req.params;
+    try {
+      await pool.query("DELETE FROM store_assignments WHERE client_id = $1 AND master_store_id = $2", [clientId, masterStoreId]);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ error: "Unassign failed" });
+    }
+  });
+
   // Client: Get My Stores
   app.get("/api/client/stores", authenticateToken, async (req: Request, res: Response) => {
     if (req.user.role === 'admin') {
       const { rows } = await pool.query("SELECT * FROM master_stores ORDER BY created_at DESC");
       return res.json(rows.map(r => ({
         id: r.id,
+        name: r.name,
         shopDomain: r.shop_domain,
         accessToken: r.access_token,
         spreadsheetId: r.spreadsheet_id,
@@ -259,6 +271,7 @@ async function startServer() {
     );
     res.json(rows.map(r => ({
       id: r.id,
+      name: r.name,
       shopDomain: r.shop_domain,
       accessToken: r.access_token,
       spreadsheetId: r.spreadsheet_id,
