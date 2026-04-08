@@ -22,6 +22,7 @@ export default function AdminDashboard() {
     sheetName: 'Sheet1',
     skuCol: 'SKU',
     priceCol: 'Price',
+    compareAtPriceCol: 'Compare At Price',
     inventoryCol: 'Inventory'
   });
 
@@ -66,7 +67,7 @@ export default function AdminDashboard() {
       if (res.id || res.success) {
         setShowAddMasterStore(false);
         setEditingStoreId(null);
-        setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', inventoryCol: 'Inventory' });
+        setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', compareAtPriceCol: 'Compare At Price', inventoryCol: 'Inventory' });
         fetchData();
       }
     } catch (err) {
@@ -87,6 +88,7 @@ export default function AdminDashboard() {
       sheetName: store.sheet_name || 'Sheet1',
       skuCol: store.sku_col || 'SKU',
       priceCol: store.price_col || 'Price',
+      compareAtPriceCol: store.compare_at_price_col || 'Compare At Price',
       inventoryCol: store.inventory_col || 'Inventory'
     });
     setShowAddMasterStore(true);
@@ -148,7 +150,7 @@ export default function AdminDashboard() {
           <button
             onClick={() => {
               setEditingStoreId(null);
-              setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', inventoryCol: 'Inventory' });
+              setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', compareAtPriceCol: 'Compare At Price', inventoryCol: 'Inventory' });
               setShowAddMasterStore(true);
             }}
             className="flex items-center space-x-2 bg-[#FFA500] hover:bg-orange-600 text-white px-6 py-3.5 rounded-2xl font-bold shadow-lg shadow-orange-500/20 transition-all active:scale-95 text-xs uppercase tracking-widest"
@@ -489,6 +491,15 @@ export default function AdminDashboard() {
                                  className="w-full bg-gray-50 border border-gray-100 rounded-xl p-4 text-black placeholder-gray-400 outline-none focus:ring-2 focus:ring-[#FFA500] font-bold transition-all text-sm"
                                  value={newMasterStore.priceCol}
                                  onChange={(e) => setNewMasterStore({ ...newMasterStore, priceCol: e.target.value })}
+                               />
+                            </div>
+                            <div>
+                               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Compare At Price Column</label>
+                               <input
+                                 type="text"
+                                 className="w-full bg-gray-50 border border-gray-100 rounded-xl p-4 text-black placeholder-gray-400 outline-none focus:ring-2 focus:ring-[#FFA500] font-bold transition-all text-sm"
+                                 value={newMasterStore.compareAtPriceCol}
+                                 onChange={(e) => setNewMasterStore({ ...newMasterStore, compareAtPriceCol: e.target.value })}
                                />
                             </div>
                             <div>

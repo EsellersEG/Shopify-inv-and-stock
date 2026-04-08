@@ -20,6 +20,7 @@ export default function SyncTool() {
 
   const [skuCol, setSkuCol] = useState("SKU");
   const [priceCol, setPriceCol] = useState("Price");
+  const [compareAtPriceCol, setCompareAtPriceCol] = useState("Compare At Price");
   const [inventoryCol, setInventoryCol] = useState("Inventory");
 
   const [syncStatus, setSyncStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
@@ -140,6 +141,7 @@ export default function SyncTool() {
     setSheetName(store.sheet_name || "Sheet1");
     setSkuCol(store.sku_col || "SKU");
     setPriceCol(store.price_col || "Price");
+    setCompareAtPriceCol(store.compare_at_price_col || "Compare At Price");
     setInventoryCol(store.inventory_col || "Inventory");
   };
 
@@ -168,6 +170,7 @@ export default function SyncTool() {
           mapping: {
             sku: skuCol,
             price: priceCol,
+            compareAtPrice: compareAtPriceCol,
             inventory: inventoryCol,
           },
         }),

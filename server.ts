@@ -50,6 +50,7 @@ async function initDatabase() {
       sheet_name TEXT DEFAULT 'Sheet1',
       sku_col TEXT DEFAULT 'SKU',
       price_col TEXT DEFAULT 'Price',
+      compare_at_price_col TEXT DEFAULT 'Compare At Price',
       inventory_col TEXT DEFAULT 'Inventory',
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -80,6 +81,13 @@ async function initDatabase() {
     await pool.query("ALTER TABLE master_stores ADD COLUMN IF NOT EXISTS name TEXT DEFAULT 'Unlabeled Store'");
   } catch (e) {
     console.error("Migration failed or column already exists:", e);
+  }
+
+  // Migration: Add compare_at_price_col column
+  try {
+    await pool.query("ALTER TABLE master_stores ADD COLUMN IF NOT EXISTS compare_at_price_col TEXT DEFAULT 'Compare At Price'");
+  } catch (e) {
+    console.error("Migration for compare_at_price_col failed:", e);
   }
 
   console.log("Database tables ready.");
@@ -180,13 +188,13 @@ async function startServer() {
   });
 
   app.post("/api/admin/master-stores", authenticateToken, isAdmin, async (req: Request, res: Response) => {
-    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, inventoryCol } = req.body;
+    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, compareAtPriceCol, inventoryCol } = req.body;
     try {
       const id = randomUUID();
       const { rows } = await pool.query(
-        `INSERT INTO master_stores (id, name, shop_domain, access_token, spreadsheet_id, service_account_json, sheet_name, sku_col, price_col, inventory_col)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-        [id, name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", inventoryCol || "Inventory"]
+        `INSERT INTO master_stores (id, name, shop_domain, access_token, spreadsheet_id, service_account_json, sheet_name, sku_col, price_col, compare_at_price_col, inventory_col)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+        [id, name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory"]
       );
       res.json(rows[0]);
     } catch (e: any) {
@@ -197,13 +205,13 @@ async function startServer() {
   // Admin: Update Master Store
   app.put("/api/admin/master-stores/:id", authenticateToken, isAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
-    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, inventoryCol } = req.body;
+    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, compareAtPriceCol, inventoryCol } = req.body;
     try {
       const { rows } = await pool.query(
         `UPDATE master_stores 
-         SET name = $1, shop_domain = $2, access_token = $3, spreadsheet_id = $4, service_account_json = $5, sheet_name = $6, sku_col = $7, price_col = $8, inventory_col = $9, updated_at = NOW()
-         WHERE id = $10 RETURNING *`,
-        [name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", inventoryCol || "Inventory", id]
+         SET name = $1, shop_domain = $2, access_token = $3, spreadsheet_id = $4, service_account_json = $5, sheet_name = $6, sku_col = $7, price_col = $8, compare_at_price_col = $9, inventory_col = $10, updated_at = NOW()
+         WHERE id = $11 RETURNING *`,
+        [name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", id]
       );
       if (rows.length === 0) return res.status(404).json({ error: "Store not found" });
       res.json(rows[0]);
@@ -261,6 +269,7 @@ async function startServer() {
         sheet_name: r.sheet_name,
         sku_col: r.sku_col,
         price_col: r.price_col,
+        compare_at_price_col: r.compare_at_price_col,
         inventory_col: r.inventory_col,
         created_at: r.created_at
       })));
@@ -279,6 +288,7 @@ async function startServer() {
       sheet_name: r.sheet_name,
       sku_col: r.sku_col,
       price_col: r.price_col,
+      compare_at_price_col: r.compare_at_price_col,
       inventory_col: r.inventory_col,
       created_at: r.created_at
     })));
@@ -351,10 +361,11 @@ async function startServer() {
         const headers = rawHeaders.map((h: any) => String(h || "").trim());
         const skuIndex = headers.indexOf(mapping.sku);
         const priceIndex = headers.indexOf(mapping.price);
+        const compareAtPriceIndex = mapping.compareAtPrice ? headers.indexOf(mapping.compareAtPrice) : -1;
         const invIndex = headers.indexOf(mapping.inventory);
         
         console.log(`[SYNC] Headers Found:`, headers);
-        console.log(`[SYNC] Indexes: SKU=${skuIndex}, Price=${priceIndex}, Inv=${invIndex}`);
+        console.log(`[SYNC] Indexes: SKU=${skuIndex}, Price=${priceIndex}, CompareAtPrice=${compareAtPriceIndex}, Inv=${invIndex}`);
 
         if (skuIndex === -1) return await updateSyncSession(shopDomain, { type: "error", message: `SKU column "${mapping.sku}" not found in sheet` });
 
@@ -375,7 +386,7 @@ async function startServer() {
           if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
           const chunk = skusArray.slice(i, i + 100);
           const queryStr = chunk.map((sku: any) => `sku:"${sku.replace(/"/g, '\\"')}"`).join(" OR ");
-          const query = `query getVariants($queryStr: String) { productVariants(first: 100, query: $queryStr) { edges { node { id sku price inventoryItem { id inventoryLevels(first: 1) { edges { node { quantities(names: ["available"]) { quantity } } } } } } } } }`;
+          const query = `query getVariants($queryStr: String) { productVariants(first: 100, query: $queryStr) { edges { node { id sku price compareAtPrice inventoryItem { id inventoryLevels(first: 1) { edges { node { quantities(names: ["available"]) { quantity } } } } } } } } }`;
           const gqlRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
             method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
             body: JSON.stringify({ query, variables: { queryStr } })
@@ -384,7 +395,7 @@ async function startServer() {
           data.data?.productVariants?.edges?.forEach((e: any) => {
             const node = e.node;
             const available = node.inventoryItem?.inventoryLevels?.edges?.[0]?.node?.quantities?.[0]?.quantity || 0;
-            shopifyVariants.set(node.sku, { variantId: node.id, invId: node.inventoryItem?.id, price: node.price, available });
+            shopifyVariants.set(node.sku, { variantId: node.id, invId: node.inventoryItem?.id, price: node.price, compareAtPrice: node.compareAtPrice, available });
           });
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(i + 100, skusArray.length), total: skusArray.length, message: `Step 1: Fetching products in sheet...` });
         }
@@ -397,18 +408,39 @@ async function startServer() {
           if (!sku) continue;
           
           const sheetPriceRaw = rows[i][priceIndex];
+          const sheetCompareAtPriceRaw = compareAtPriceIndex !== -1 ? rows[i][compareAtPriceIndex] : undefined;
           const sheetInvRaw = rows[i][invIndex];
           
           const shopify = shopifyVariants.get(sku);
           if (!shopify) continue;
 
-          if (shouldSyncPrice && sheetPriceRaw !== undefined && sheetPriceRaw !== "") {
-            const sheetPrice = parseFloat(String(sheetPriceRaw).replace(/[^\d.-]/g, ""));
-            const shopifyPrice = parseFloat(shopify.price);
-            
-            if (!isNaN(sheetPrice) && sheetPrice !== shopifyPrice) {
-              updates.push({ type: "price", sku, id: shopify.variantId, value: sheetPrice.toString() });
-              console.log(`[SYNC] Price Pending: SKU ${sku} -> ${shopifyPrice} to ${sheetPrice}`);
+          if (shouldSyncPrice) {
+            let priceChanged = false;
+            let compareAtPriceChanged = false;
+            let newPrice = shopify.price;
+            let newCompareAtPrice = shopify.compareAtPrice;
+
+            if (sheetPriceRaw !== undefined && sheetPriceRaw !== "") {
+              const sheetPrice = parseFloat(String(sheetPriceRaw).replace(/[^\d.-]/g, ""));
+              const shopifyPrice = parseFloat(shopify.price || "0");
+              if (!isNaN(sheetPrice) && sheetPrice !== shopifyPrice) {
+                newPrice = sheetPrice.toString();
+                priceChanged = true;
+              }
+            }
+
+            if (sheetCompareAtPriceRaw !== undefined && sheetCompareAtPriceRaw !== "") {
+              const sheetCompareAtPrice = parseFloat(String(sheetCompareAtPriceRaw).replace(/[^\d.-]/g, ""));
+              const shopifyCompareAtPrice = parseFloat(shopify.compareAtPrice || "0");
+              if (!isNaN(sheetCompareAtPrice) && sheetCompareAtPrice !== shopifyCompareAtPrice) {
+                newCompareAtPrice = sheetCompareAtPrice.toString();
+                compareAtPriceChanged = true;
+              }
+            }
+
+            if (priceChanged || compareAtPriceChanged) {
+              updates.push({ type: "price", sku, id: shopify.variantId, price: newPrice, compareAtPrice: newCompareAtPrice, priceChanged, compareAtPriceChanged });
+              console.log(`[SYNC] Price Pending: SKU ${sku} -> price: ${shopify.price} to ${newPrice}, compareAt: ${shopify.compareAtPrice} to ${newCompareAtPrice}`);
             }
           }
 
@@ -433,7 +465,12 @@ async function startServer() {
 
           if (priceBatch.length > 0) {
             let mutation = `mutation {`;
-            priceBatch.forEach((u: any, idx: number) => { mutation += `v${idx}: productVariantUpdate(input: {id: "${u.id}", price: "${u.value}"}) { productVariant { sku price } userErrors { field message } }`; });
+            priceBatch.forEach((u: any, idx: number) => {
+              const input: string[] = [`id: "${u.id}"`];
+              if (u.priceChanged) input.push(`price: "${u.price}"`);
+              if (u.compareAtPriceChanged) input.push(`compareAtPrice: "${u.compareAtPrice}"`);
+              mutation += `v${idx}: productVariantUpdate(input: {${input.join(", ")}}) { productVariant { sku price compareAtPrice } userErrors { field message } }`;
+            });
             mutation += `}`;
             const gqlRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
               method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
@@ -453,7 +490,7 @@ async function startServer() {
           if (invBatch.length > 0) {
             const mutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
             const variables = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: invBatch.map((u: any) => ({ inventoryItemId: u.id, locationId: `gid://shopify/Location/${locationId}`, quantity: u.value })) } };
-            await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
+            const invRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
               method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
               body: JSON.stringify({ query: mutation, variables })
             });
