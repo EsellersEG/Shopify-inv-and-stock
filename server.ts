@@ -374,34 +374,38 @@ async function startServer() {
 
         let locationId = null;
         if (shouldSyncStock) {
-          const locRes = await fetch(`https://${shopDomain}/admin/api/2024-01/locations.json`, { headers: { "X-Shopify-Access-Token": accessToken } });
+          const locRes = await fetch(`https://${shopDomain}/admin/api/2025-01/locations.json`, { headers: { "X-Shopify-Access-Token": accessToken } });
           const locData = await locRes.json();
           locationId = locData.locations?.[0]?.id;
         }
 
         const skusArray = Array.from(new Set(rows.slice(1).map((r: any) => r[skuIndex]).filter(Boolean)));
         const shopifyVariants = new Map();
+        const logs: string[] = [];
 
         for (let i = 0; i < skusArray.length; i += 100) {
           if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
           const chunk = skusArray.slice(i, i + 100);
           const queryStr = chunk.map((sku: any) => `sku:"${sku.replace(/"/g, '\\"')}"`).join(" OR ");
-          const query = `query getVariants($queryStr: String) { productVariants(first: 100, query: $queryStr) { edges { node { id sku price compareAtPrice inventoryItem { id inventoryLevels(first: 1) { edges { node { quantities(names: ["available"]) { quantity } } } } } } } } }`;
-          const gqlRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
+          const query = `query getVariants($queryStr: String) { productVariants(first: 100, query: $queryStr) { edges { node { id sku price compareAtPrice product { id } inventoryItem { id inventoryLevels(first: 1) { edges { node { quantities(names: ["available"]) { quantity } } } } } } } } }`;
+          const gqlRes = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
             method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
             body: JSON.stringify({ query, variables: { queryStr } })
           });
           const data = await gqlRes.json();
+          if (data.errors) {
+            console.error(`[SYNC] GraphQL Query Errors:`, JSON.stringify(data.errors));
+            logs.push(`GraphQL fetch error: ${data.errors[0]?.message || 'Unknown'}`);
+          }
           data.data?.productVariants?.edges?.forEach((e: any) => {
             const node = e.node;
             const available = node.inventoryItem?.inventoryLevels?.edges?.[0]?.node?.quantities?.[0]?.quantity || 0;
-            shopifyVariants.set(node.sku, { variantId: node.id, invId: node.inventoryItem?.id, price: node.price, compareAtPrice: node.compareAtPrice, available });
+            shopifyVariants.set(node.sku, { variantId: node.id, productId: node.product?.id, invId: node.inventoryItem?.id, price: node.price, compareAtPrice: node.compareAtPrice, available });
           });
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(i + 100, skusArray.length), total: skusArray.length, message: `Step 1: Fetching products in sheet...` });
         }
 
         const updates: any[] = [];
-        const logs: string[] = [];
         
         for (let i = 1; i < rows.length; i++) {
           const sku = String(rows[i][skuIndex] || "").trim();
@@ -439,7 +443,7 @@ async function startServer() {
             }
 
             if (priceChanged || compareAtPriceChanged) {
-              updates.push({ type: "price", sku, id: shopify.variantId, price: newPrice, compareAtPrice: newCompareAtPrice, priceChanged, compareAtPriceChanged });
+              updates.push({ type: "price", sku, id: shopify.variantId, productId: shopify.productId, price: newPrice, compareAtPrice: newCompareAtPrice, priceChanged, compareAtPriceChanged });
               console.log(`[SYNC] Price Pending: SKU ${sku} -> price: ${shopify.price} to ${newPrice}, compareAt: ${shopify.compareAtPrice} to ${newCompareAtPrice}`);
             }
           }
@@ -455,7 +459,7 @@ async function startServer() {
           }
         }
 
-        if (updates.length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: 0, errorCount: 0, logs: [], duration: Date.now() - startTime });
+        if (updates.length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: 0, errorCount: 0, logs, duration: Date.now() - startTime });
 
         for (let i = 0; i < updates.length; i += 50) {
           if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
@@ -464,23 +468,45 @@ async function startServer() {
           const invBatch = batch.filter((u: any) => u.type === "inv");
 
           if (priceBatch.length > 0) {
-            let mutation = `mutation {`;
-            priceBatch.forEach((u: any, idx: number) => {
-              const input: string[] = [`id: "${u.id}"`];
-              if (u.priceChanged) input.push(`price: "${u.price}"`);
-              if (u.compareAtPriceChanged) input.push(`compareAtPrice: "${u.compareAtPrice}"`);
-              mutation += `v${idx}: productVariantUpdate(input: {${input.join(", ")}}) { productVariant { sku price compareAtPrice } userErrors { field message } }`;
+            // Group by productId for productVariantsBulkUpdate
+            const byProduct: Record<string, any[]> = {};
+            priceBatch.forEach((u: any) => {
+              if (!byProduct[u.productId]) byProduct[u.productId] = [];
+              byProduct[u.productId].push(u);
             });
-            mutation += `}`;
-            const gqlRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
+
+            const productIds = Object.keys(byProduct);
+            let mutation = `mutation {`;
+            productIds.forEach((productId, pIdx) => {
+              const variants = byProduct[productId];
+              const variantInputs = variants.map((u: any) => {
+                const fields: string[] = [`id: "${u.id}"`];
+                if (u.priceChanged) fields.push(`price: "${u.price}"`);
+                if (u.compareAtPriceChanged) fields.push(`compareAtPrice: "${u.compareAtPrice}"`);
+                return `{${fields.join(", ")}}`;
+              }).join(", ");
+              mutation += ` p${pIdx}: productVariantsBulkUpdate(productId: "${productId}", variants: [${variantInputs}]) { productVariants { id sku price compareAtPrice } userErrors { field message } }`;
+            });
+            mutation += ` }`;
+
+            console.log(`[SYNC] Price mutation: ${productIds.length} products, ${priceBatch.length} variants`);
+            const gqlRes = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
               method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
               body: JSON.stringify({ query: mutation })
             });
             const result = await gqlRes.json();
+            if (result.errors) {
+              const msg = `GraphQL Price Error: ${result.errors[0]?.message || JSON.stringify(result.errors)}`;
+              console.error(`[SYNC] ${msg}`);
+              logs.push(msg);
+            }
             Object.keys(result.data || {}).forEach(key => {
-              const errors = result.data[key].userErrors;
+              const errors = result.data[key]?.userErrors;
               if (errors?.length > 0) {
-                const msg = `Price Error (${priceBatch[parseInt(key.slice(1))].sku}): ${errors[0].message}`;
+                const pIdx = parseInt(key.slice(1));
+                const pid = productIds[pIdx];
+                const skus = byProduct[pid]?.map((v: any) => v.sku).join(', ');
+                const msg = `Price Error (${skus}): ${errors[0].message}`;
                 console.error(`[SYNC] ${msg}`);
                 logs.push(msg);
               }
@@ -490,11 +516,16 @@ async function startServer() {
           if (invBatch.length > 0) {
             const mutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
             const variables = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: invBatch.map((u: any) => ({ inventoryItemId: u.id, locationId: `gid://shopify/Location/${locationId}`, quantity: u.value })) } };
-            const invRes = await fetch(`https://${shopDomain}/admin/api/2024-01/graphql.json`, {
+            const invRes = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
               method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
               body: JSON.stringify({ query: mutation, variables })
             });
             const result = await invRes.json();
+            if (result.errors) {
+              const msg = `GraphQL Inventory Error: ${result.errors[0]?.message || JSON.stringify(result.errors)}`;
+              console.error(`[SYNC] ${msg}`);
+              logs.push(msg);
+            }
             const errors = result.data?.inventorySetQuantities?.userErrors;
             if (errors?.length > 0) {
               const msg = `Inventory Error: ${errors[0].message}`;
