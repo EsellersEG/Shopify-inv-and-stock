@@ -433,12 +433,20 @@ async function startServer() {
               }
             }
 
-            if (sheetCompareAtPriceRaw !== undefined && sheetCompareAtPriceRaw !== "") {
-              const sheetCompareAtPrice = parseFloat(String(sheetCompareAtPriceRaw).replace(/[^\d.-]/g, ""));
-              const shopifyCompareAtPrice = parseFloat(shopify.compareAtPrice || "0");
-              if (!isNaN(sheetCompareAtPrice) && sheetCompareAtPrice !== shopifyCompareAtPrice) {
-                newCompareAtPrice = sheetCompareAtPrice.toString();
-                compareAtPriceChanged = true;
+            if (compareAtPriceIndex !== -1) {
+              if (sheetCompareAtPriceRaw === undefined || sheetCompareAtPriceRaw === null || String(sheetCompareAtPriceRaw).trim() === "") {
+                // Sheet is empty → clear compare-at price on Shopify if it has one
+                if (shopify.compareAtPrice && parseFloat(shopify.compareAtPrice) > 0) {
+                  newCompareAtPrice = null;
+                  compareAtPriceChanged = true;
+                }
+              } else {
+                const sheetCompareAtPrice = parseFloat(String(sheetCompareAtPriceRaw).replace(/[^\d.-]/g, ""));
+                const shopifyCompareAtPrice = parseFloat(shopify.compareAtPrice || "0");
+                if (!isNaN(sheetCompareAtPrice) && sheetCompareAtPrice !== shopifyCompareAtPrice) {
+                  newCompareAtPrice = sheetCompareAtPrice.toString();
+                  compareAtPriceChanged = true;
+                }
               }
             }
 
@@ -482,7 +490,13 @@ async function startServer() {
               const variantInputs = variants.map((u: any) => {
                 const fields: string[] = [`id: "${u.id}"`];
                 if (u.priceChanged) fields.push(`price: "${u.price}"`);
-                if (u.compareAtPriceChanged) fields.push(`compareAtPrice: "${u.compareAtPrice}"`);
+                if (u.compareAtPriceChanged) {
+                  if (u.compareAtPrice === null || u.compareAtPrice === "") {
+                    fields.push(`compareAtPrice: null`);
+                  } else {
+                    fields.push(`compareAtPrice: "${u.compareAtPrice}"`);
+                  }
+                }
                 return `{${fields.join(", ")}}`;
               }).join(", ");
               mutation += ` p${pIdx}: productVariantsBulkUpdate(productId: "${productId}", variants: [${variantInputs}]) { productVariants { id sku price compareAtPrice } userErrors { field message } }`;
