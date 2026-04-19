@@ -23,7 +23,9 @@ export default function AdminDashboard() {
     skuCol: 'SKU',
     priceCol: 'Price',
     compareAtPriceCol: 'Compare At Price',
-    inventoryCol: 'Inventory'
+    inventoryCol: 'Inventory',
+    fieldMappings: {} as Record<string, string>,
+    metafieldMappings: [] as any[],
   });
 
   const [selectedClient, setSelectedClient] = useState<any>(null);
@@ -67,7 +69,7 @@ export default function AdminDashboard() {
       if (res.id || res.success) {
         setShowAddMasterStore(false);
         setEditingStoreId(null);
-        setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', compareAtPriceCol: 'Compare At Price', inventoryCol: 'Inventory' });
+        setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', compareAtPriceCol: 'Compare At Price', inventoryCol: 'Inventory', fieldMappings: {}, metafieldMappings: [] });
         fetchData();
       }
     } catch (err) {
@@ -79,6 +81,10 @@ export default function AdminDashboard() {
 
   const handleEditStore = (store: any) => {
     setEditingStoreId(store.id);
+    let fm = {};
+    let mfm: any[] = [];
+    try { fm = JSON.parse(store.field_mappings || '{}'); } catch {}
+    try { mfm = JSON.parse(store.metafield_mappings || '[]'); } catch {}
     setNewMasterStore({
       name: store.name || '',
       shopDomain: store.shop_domain,
@@ -89,7 +95,9 @@ export default function AdminDashboard() {
       skuCol: store.sku_col || 'SKU',
       priceCol: store.price_col || 'Price',
       compareAtPriceCol: store.compare_at_price_col || 'Compare At Price',
-      inventoryCol: store.inventory_col || 'Inventory'
+      inventoryCol: store.inventory_col || 'Inventory',
+      fieldMappings: fm,
+      metafieldMappings: mfm,
     });
     setShowAddMasterStore(true);
   };
@@ -150,7 +158,7 @@ export default function AdminDashboard() {
           <button
             onClick={() => {
               setEditingStoreId(null);
-              setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', compareAtPriceCol: 'Compare At Price', inventoryCol: 'Inventory' });
+              setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', compareAtPriceCol: 'Compare At Price', inventoryCol: 'Inventory', fieldMappings: {}, metafieldMappings: [] });
               setShowAddMasterStore(true);
             }}
             className="flex items-center space-x-2 bg-[#FFA500] hover:bg-orange-600 text-white px-6 py-3.5 rounded-2xl font-bold shadow-lg shadow-orange-500/20 transition-all active:scale-95 text-xs uppercase tracking-widest"

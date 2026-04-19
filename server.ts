@@ -90,6 +90,20 @@ async function initDatabase() {
     console.error("Migration for compare_at_price_col failed:", e);
   }
 
+  // Migration: Add field_mappings JSON column for extended Shopify field mapping
+  try {
+    await pool.query("ALTER TABLE master_stores ADD COLUMN IF NOT EXISTS field_mappings TEXT DEFAULT '{}'");
+  } catch (e) {
+    console.error("Migration for field_mappings failed:", e);
+  }
+
+  // Migration: Add metafield_mappings JSON column
+  try {
+    await pool.query("ALTER TABLE master_stores ADD COLUMN IF NOT EXISTS metafield_mappings TEXT DEFAULT '[]'");
+  } catch (e) {
+    console.error("Migration for metafield_mappings failed:", e);
+  }
+
   console.log("Database tables ready.");
 }
 
@@ -188,13 +202,13 @@ async function startServer() {
   });
 
   app.post("/api/admin/master-stores", authenticateToken, isAdmin, async (req: Request, res: Response) => {
-    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, compareAtPriceCol, inventoryCol } = req.body;
+    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, compareAtPriceCol, inventoryCol, fieldMappings, metafieldMappings } = req.body;
     try {
       const id = randomUUID();
       const { rows } = await pool.query(
-        `INSERT INTO master_stores (id, name, shop_domain, access_token, spreadsheet_id, service_account_json, sheet_name, sku_col, price_col, compare_at_price_col, inventory_col)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-        [id, name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory"]
+        `INSERT INTO master_stores (id, name, shop_domain, access_token, spreadsheet_id, service_account_json, sheet_name, sku_col, price_col, compare_at_price_col, inventory_col, field_mappings, metafield_mappings)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+        [id, name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", JSON.stringify(fieldMappings || {}), JSON.stringify(metafieldMappings || [])]
       );
       res.json(rows[0]);
     } catch (e: any) {
@@ -205,13 +219,13 @@ async function startServer() {
   // Admin: Update Master Store
   app.put("/api/admin/master-stores/:id", authenticateToken, isAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
-    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, compareAtPriceCol, inventoryCol } = req.body;
+    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, compareAtPriceCol, inventoryCol, fieldMappings, metafieldMappings } = req.body;
     try {
       const { rows } = await pool.query(
         `UPDATE master_stores 
-         SET name = $1, shop_domain = $2, access_token = $3, spreadsheet_id = $4, service_account_json = $5, sheet_name = $6, sku_col = $7, price_col = $8, compare_at_price_col = $9, inventory_col = $10, updated_at = NOW()
-         WHERE id = $11 RETURNING *`,
-        [name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", id]
+         SET name = $1, shop_domain = $2, access_token = $3, spreadsheet_id = $4, service_account_json = $5, sheet_name = $6, sku_col = $7, price_col = $8, compare_at_price_col = $9, inventory_col = $10, field_mappings = $11, metafield_mappings = $12, updated_at = NOW()
+         WHERE id = $13 RETURNING *`,
+        [name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", JSON.stringify(fieldMappings || {}), JSON.stringify(metafieldMappings || []), id]
       );
       if (rows.length === 0) return res.status(404).json({ error: "Store not found" });
       res.json(rows[0]);
@@ -271,6 +285,8 @@ async function startServer() {
         price_col: r.price_col,
         compare_at_price_col: r.compare_at_price_col,
         inventory_col: r.inventory_col,
+        field_mappings: r.field_mappings,
+        metafield_mappings: r.metafield_mappings,
         created_at: r.created_at
       })));
     }
@@ -290,8 +306,39 @@ async function startServer() {
       price_col: r.price_col,
       compare_at_price_col: r.compare_at_price_col,
       inventory_col: r.inventory_col,
+      field_mappings: r.field_mappings,
+      metafield_mappings: r.metafield_mappings,
       created_at: r.created_at
     })));
+  });
+
+  // Get sheet headers and first row preview for a store
+  app.get("/api/stores/:id/sheet-headers", authenticateToken, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    try {
+      const { rows } = await pool.query("SELECT * FROM master_stores WHERE id = $1", [id]);
+      if (rows.length === 0) return res.status(404).json({ error: "Store not found" });
+      const store = rows[0];
+
+      const credentials = JSON.parse(store.service_account_json);
+      const auth = new google.auth.GoogleAuth({ credentials, scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"] });
+      const sheets = google.sheets({ version: "v4", auth });
+      const sheetRes = await sheets.spreadsheets.values.get({ spreadsheetId: store.spreadsheet_id, range: `${store.sheet_name || "Sheet1"}!1:2` });
+      const sheetRows = sheetRes.data.values;
+      if (!sheetRows || sheetRows.length === 0) return res.json({ headers: [], preview: {} });
+
+      const headers = (sheetRows[0] || []).map((h: any) => String(h || "").trim());
+      const firstRow = sheetRows[1] || [];
+      const preview: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => {
+        preview[h] = String(firstRow[i] || "");
+      });
+
+      res.json({ headers, preview });
+    } catch (e: any) {
+      console.error("Failed to fetch sheet headers:", e.message);
+      res.status(500).json({ error: "Failed to fetch sheet headers" });
+    }
   });
 
   // Background Sync Management

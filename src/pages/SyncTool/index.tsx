@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api } from "../../lib/api";
-import { Settings, RefreshCw, Database, CheckCircle2, AlertCircle, Play, Save, LayoutGrid, Store, X } from "lucide-react";
+import { Settings, RefreshCw, Database, CheckCircle2, AlertCircle, Play, Save, LayoutGrid, Store, X, MapPin } from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
+import FieldMapping from "./FieldMapping";
 
 export default function SyncTool() {
   const location = useLocation();
@@ -31,6 +32,7 @@ export default function SyncTool() {
   const [syncResult, setSyncResult] = useState<{ updated: number; errors: number; duration?: number } | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const [currentView, setCurrentView] = useState<"sync" | "mapping">("sync");
 
   useEffect(() => {
     fetchMyStores();
@@ -134,15 +136,15 @@ export default function SyncTool() {
   const applyStore = (store: any) => {
     setSelectedStoreId(store.id);
     setStoreName(store.name || "");
-    setShopDomain(store.shopDomain);
-    setAccessToken(store.accessToken);
-    setSpreadsheetId(store.spreadsheetId);
-    setServiceAccountJson(store.serviceAccountJson);
-    setSheetName(store.sheet_name || "Sheet1");
-    setSkuCol(store.sku_col || "SKU");
-    setPriceCol(store.price_col || "Price");
-    setCompareAtPriceCol(store.compare_at_price_col || "Compare At Price");
-    setInventoryCol(store.inventory_col || "Inventory");
+    setShopDomain(store.shopDomain || store.shop_domain);
+    setAccessToken(store.accessToken || store.access_token);
+    setSpreadsheetId(store.spreadsheetId || store.spreadsheet_id);
+    setServiceAccountJson(store.serviceAccountJson || store.service_account_json);
+    setSheetName(store.sheet_name || store.sheetName || "Sheet1");
+    setSkuCol(store.sku_col || store.skuCol || "SKU");
+    setPriceCol(store.price_col || store.priceCol || "Price");
+    setCompareAtPriceCol(store.compare_at_price_col || store.compareAtPriceCol || "Compare At Price");
+    setInventoryCol(store.inventory_col || store.inventoryCol || "Inventory");
   };
 
   const handleSync = async () => {
@@ -225,6 +227,40 @@ export default function SyncTool() {
         </div>
       </header>
 
+      {/* Tab Navigation */}
+      <div className="flex space-x-2 bg-gray-50 p-1.5 rounded-2xl w-fit border border-gray-100 mb-8">
+        <button
+          onClick={() => setCurrentView("sync")}
+          className={`px-6 py-3 text-xs font-black rounded-xl transition-all uppercase tracking-widest ${
+            currentView === "sync" ? "bg-white text-black shadow-lg ring-1 ring-black/5" : "text-gray-500 hover:text-black"
+          }`}
+        >
+          <span className="flex items-center gap-2"><RefreshCw className="w-3.5 h-3.5" /> Execute Sync</span>
+        </button>
+        <button
+          onClick={() => setCurrentView("mapping")}
+          className={`px-6 py-3 text-xs font-black rounded-xl transition-all uppercase tracking-widest ${
+            currentView === "mapping" ? "bg-white text-black shadow-lg ring-1 ring-black/5" : "text-gray-500 hover:text-black"
+          }`}
+        >
+          <span className="flex items-center gap-2"><MapPin className="w-3.5 h-3.5" /> Attribute Mapping</span>
+        </button>
+      </div>
+
+      {currentView === "mapping" && selectedStoreId && (
+        <FieldMapping
+          storeId={selectedStoreId}
+          spreadsheetId={spreadsheetId}
+          serviceAccountJson={serviceAccountJson}
+          sheetName={sheetName}
+          skuCol={skuCol}
+          priceCol={priceCol}
+          compareAtPriceCol={compareAtPriceCol}
+          inventoryCol={inventoryCol}
+        />
+      )}
+
+      {currentView === "sync" && (
       <div className="bg-gray-50 rounded-[3rem] border border-gray-100 overflow-hidden shadow-2xl backdrop-blur-xl relative">
         <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#FFA500]/20 to-transparent" />
         
@@ -339,6 +375,7 @@ export default function SyncTool() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }
