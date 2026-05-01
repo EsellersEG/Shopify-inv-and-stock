@@ -568,16 +568,16 @@ async function startServer() {
         for (let i = 0; i < skusArray.length; i += 100) {
           if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
           const chunk = skusArray.slice(i, i + 100);
-          const queryStr = chunk.map((sku: any) => `sku:"${sku.replace(/"/g, '\\"')}"`).join(" OR ");
-          const query = `query getVariants($queryStr: String) { productVariants(first: 100, query: $queryStr) { edges { node { id sku price compareAtPrice product { id } inventoryItem { id inventoryLevels(first: 1) { edges { node { quantities(names: ["available"]) { quantity } } } } } } } } }`;
+          const searchQuery = chunk.map((sku: any) => `sku:${JSON.stringify(String(sku))}`).join(" OR ");
+          const gqlQuery = `query ($q: String!) { productVariants(first: 100, query: $q) { edges { node { id sku price compareAtPrice product { id } inventoryItem { id inventoryLevels(first: 1) { edges { node { quantities(names: ["available"]) { quantity } } } } } } } } }`;
           const gqlRes = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
             method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-            body: JSON.stringify({ query, variables: { queryStr } })
+            body: JSON.stringify({ query: gqlQuery, variables: { q: searchQuery } })
           });
           const data = await gqlRes.json();
           if (data.errors) {
             console.error(`[SYNC] GraphQL Query Errors:`, JSON.stringify(data.errors));
-            logs.push(`GraphQL fetch error: ${data.errors[0]?.message || 'Unknown'}`);
+            logs.push(`GraphQL fetch error: ${data.errors[0]?.message || JSON.stringify(data.errors[0])}`);
           }
           data.data?.productVariants?.edges?.forEach((e: any) => {
             const node = e.node;
