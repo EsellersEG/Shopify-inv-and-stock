@@ -684,19 +684,19 @@ async function startServer() {
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(fetchedCount, skusArray.length), total: skusArray.length, message: `Step 1: Fetching products (${Math.round(fetchedCount / skusArray.length * 100)}%)...` });
         }, 4);
 
-        // ── Identify products to create (if title mapping exists) ──
+        // ── Identify products to create (only in "Sync All" mode with title mapping) ──
         const titleColIdx = fieldMappings.title ? headers.indexOf(fieldMappings.title) : -1;
         const descColIdx = fieldMappings.description ? headers.indexOf(fieldMappings.description) : (fieldMappings.body_html ? headers.indexOf(fieldMappings.body_html) : -1);
         const vendorColIdx = fieldMappings.vendor ? headers.indexOf(fieldMappings.vendor) : -1;
         const productTypeColIdx = fieldMappings.product_type ? headers.indexOf(fieldMappings.product_type) : -1;
-        const canCreateProducts = titleColIdx !== -1;
+        const canCreateProducts = syncMode === "all" && titleColIdx !== -1;
         
         if (canCreateProducts) {
-          console.log(`[SYNC] Product creation enabled - title column found at index ${titleColIdx}`);
+          console.log(`[SYNC] Product creation enabled - syncMode=all and title column found at index ${titleColIdx}`);
         }
 
         const updates: any[] = [];
-        const productUpdates: Record<string, { tags?: string[]; status?: string; imageSrc?: string }> = {};
+        const productUpdates: Record<string, { tags?: string[]; status?: string; imageSrc?: string }> = {};;
         
         for (let i = 1; i < rows.length; i++) {
           const sku = String(rows[i][skuIndex] || "").trim();
@@ -901,8 +901,10 @@ async function startServer() {
               const variantNode = newProduct.variants?.edges?.[0]?.node;
               const variantId = variantNode?.id;
               const invItemId = variantNode?.inventoryItem?.id;
+              let variantUpdateOk = true;
+              let skuUpdateOk = true;
               
-              // Step 2: Update the default variant with SKU, price, compareAtPrice
+              // Step 2a: Update the default variant with price, compareAtPrice
               if (variantId) {
                 const variantMutation = `mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
                   productVariantsBulkUpdate(productId: $productId, variants: $variants) {
@@ -914,19 +916,45 @@ async function startServer() {
                   productId: newProduct.id,
                   variants: [{
                     id: variantId,
-                    sku: item.sku,
                     price: String(item.price || 0),
                     compareAtPrice: item.compareAtPrice ? String(item.compareAtPrice) : null,
                   }]
                 };
                 const variantResult = await shopifyGraphQL(shopDomain, accessToken, variantMutation, variantVars);
                 if (variantResult.data?.productVariantsBulkUpdate?.userErrors?.length > 0) {
-                  console.error(`[SYNC] Variant update error for ${item.sku}:`, variantResult.data.productVariantsBulkUpdate.userErrors);
+                  const errMsg = variantResult.data.productVariantsBulkUpdate.userErrors[0].message;
+                  console.error(`[SYNC] Variant price update error for ${item.sku}:`, errMsg);
+                  logs.push(`Price update failed for ${item.sku}: ${errMsg}`);
+                  variantUpdateOk = false;
+                }
+              }
+              
+              // Step 2b: Update inventory item with SKU (SKU lives on InventoryItem in API 2025-01)
+              if (invItemId && item.sku) {
+                const skuMutation = `mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
+                  inventoryItemUpdate(id: $id, input: $input) {
+                    inventoryItem { id sku }
+                    userErrors { field message }
+                  }
+                }`;
+                const skuVars = {
+                  id: invItemId,
+                  input: { sku: item.sku }
+                };
+                const skuResult = await shopifyGraphQL(shopDomain, accessToken, skuMutation, skuVars);
+                if (skuResult.data?.inventoryItemUpdate?.userErrors?.length > 0) {
+                  const errMsg = skuResult.data.inventoryItemUpdate.userErrors[0].message;
+                  console.error(`[SYNC] SKU update error for ${item.sku}:`, errMsg);
+                  logs.push(`SKU update failed for ${item.sku}: ${errMsg}`);
+                  skuUpdateOk = false;
+                } else {
+                  console.log(`[SYNC] SKU set: ${item.sku} on ${invItemId}`);
                 }
               }
               
               createdCount++;
-              syncResultsArr.push({ sku: item.sku, status: "updated", action: "created", message: "Product created in Shopify", rowNumber: item.rowNumber });
+              const statusMsg = (!variantUpdateOk || !skuUpdateOk) ? "Product created with partial errors" : "Product created in Shopify";
+              syncResultsArr.push({ sku: item.sku, status: "updated", action: "created", message: statusMsg, rowNumber: item.rowNumber });
               console.log(`[SYNC] Created: ${item.sku} -> ${newProduct.id}`);
               
               // Step 3: Set inventory if we have a location and inventory value
