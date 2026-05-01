@@ -244,13 +244,46 @@ async function shopifyGraphQL(
     }
 
     // Success - add a small delay to pace requests
-    await new Promise(r => setTimeout(r, 250));
+    await new Promise(r => setTimeout(r, 100));
     return data;
   }
 
   // Max retries exceeded
   console.error(`[RATE LIMIT] Max retries (${maxRetries}) exceeded`);
   return { errors: lastError || [{ message: 'Max retries exceeded due to rate limiting' }] };
+}
+
+// ── Parallel batch processor with controlled concurrency ──
+async function parallelBatch<T, R>(
+  items: T[],
+  fn: (item: T, index: number) => Promise<R>,
+  concurrency = 4
+): Promise<R[]> {
+  const results: R[] = [];
+  let activeCount = 0;
+  let currentIndex = 0;
+
+  return new Promise((resolve, reject) => {
+    const runNext = () => {
+      while (activeCount < concurrency && currentIndex < items.length) {
+        const idx = currentIndex++;
+        activeCount++;
+        fn(items[idx], idx)
+          .then(result => {
+            results[idx] = result;
+            activeCount--;
+            if (currentIndex >= items.length && activeCount === 0) {
+              resolve(results);
+            } else {
+              runNext();
+            }
+          })
+          .catch(reject);
+      }
+    };
+    if (items.length === 0) resolve([]);
+    else runNext();
+  });
 }
 
 async function startServer() {
@@ -619,23 +652,47 @@ async function startServer() {
         const shopifyVariants = new Map();
         const logs: string[] = [];
 
+        // ── Step 1: Parallel SKU lookups (4 concurrent batches) ──
+        const skuBatches: string[][] = [];
         for (let i = 0; i < skusArray.length; i += 100) {
+          skuBatches.push(skusArray.slice(i, i + 100) as string[]);
+        }
+        
+        console.log(`[SYNC] Fetching ${skusArray.length} SKUs in ${skuBatches.length} batches (4 parallel)`);
+        let fetchedCount = 0;
+        
+        await parallelBatch(skuBatches, async (chunk, batchIdx) => {
           if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
-          const chunk = skusArray.slice(i, i + 100);
+          
           const searchQuery = chunk.map((sku: any) => `sku:${JSON.stringify(String(sku))}`).join(" OR ");
           const gqlQuery = `query ($q: String!) { productVariants(first: 100, query: $q) { edges { node { id sku price compareAtPrice product { id } inventoryItem { id inventoryLevels(first: 1) { edges { node { quantities(names: ["available"]) { quantity } } } } } } } } }`;
           const data = await shopifyGraphQL(shopDomain, accessToken, gqlQuery, { q: searchQuery });
+          
           if (data.errors) {
             const errMsg = Array.isArray(data.errors) ? (data.errors[0]?.message || JSON.stringify(data.errors)) : JSON.stringify(data.errors);
-            console.error(`[SYNC] GraphQL Query Errors:`, JSON.stringify(data.errors));
+            console.error(`[SYNC] GraphQL Query Errors (batch ${batchIdx}):`, JSON.stringify(data.errors));
             logs.push(`GraphQL error: ${errMsg}`);
           }
+          
           data.data?.productVariants?.edges?.forEach((e: any) => {
             const node = e.node;
             const available = node.inventoryItem?.inventoryLevels?.edges?.[0]?.node?.quantities?.[0]?.quantity || 0;
             shopifyVariants.set(node.sku, { variantId: node.id, productId: node.product?.id, invId: node.inventoryItem?.id, price: node.price, compareAtPrice: node.compareAtPrice, available });
           });
-          await updateSyncSession(shopDomain, { type: "progress", current: Math.min(i + 100, skusArray.length), total: skusArray.length, message: `Step 1: Fetching products in sheet...` });
+          
+          fetchedCount += chunk.length;
+          await updateSyncSession(shopDomain, { type: "progress", current: Math.min(fetchedCount, skusArray.length), total: skusArray.length, message: `Step 1: Fetching products (${Math.round(fetchedCount / skusArray.length * 100)}%)...` });
+        }, 4);
+
+        // ── Identify products to create (if title mapping exists) ──
+        const titleColIdx = fieldMappings.title ? headers.indexOf(fieldMappings.title) : -1;
+        const descColIdx = fieldMappings.description ? headers.indexOf(fieldMappings.description) : (fieldMappings.body_html ? headers.indexOf(fieldMappings.body_html) : -1);
+        const vendorColIdx = fieldMappings.vendor ? headers.indexOf(fieldMappings.vendor) : -1;
+        const productTypeColIdx = fieldMappings.product_type ? headers.indexOf(fieldMappings.product_type) : -1;
+        const canCreateProducts = titleColIdx !== -1;
+        
+        if (canCreateProducts) {
+          console.log(`[SYNC] Product creation enabled - title column found at index ${titleColIdx}`);
         }
 
         const updates: any[] = [];
@@ -661,7 +718,42 @@ async function startServer() {
           
           const shopify = shopifyVariants.get(sku);
           if (!shopify) {
-            syncResultsArr.push({ sku, status: "not_found", action: "no_shopify_match", message: "SKU not found in Shopify", rowNumber: i });
+            // Product not found - queue for creation if we have title mapping
+            if (canCreateProducts) {
+              const title = String(rows[i][titleColIdx] ?? "").trim();
+              if (title) {
+                const price = sheetPriceRaw ? parseFloat(String(sheetPriceRaw).replace(/[^\d.-]/g, "")) : 0;
+                const compareAtPrice = sheetCompareAtPriceRaw ? parseFloat(String(sheetCompareAtPriceRaw).replace(/[^\d.-]/g, "")) : null;
+                const inventory = sheetInvRaw ? parseInt(String(sheetInvRaw).replace(/[^\d-]/g, "")) : 0;
+                const description = descColIdx !== -1 ? String(rows[i][descColIdx] ?? "").trim() : "";
+                const vendor = vendorColIdx !== -1 ? String(rows[i][vendorColIdx] ?? "").trim() : "";
+                const productType = productTypeColIdx !== -1 ? String(rows[i][productTypeColIdx] ?? "").trim() : "";
+                const tags = tagsColIdx !== -1 ? String(rows[i][tagsColIdx] ?? "").trim().split(",").map(t => t.trim()).filter(Boolean) : [];
+                const status = statusColIdx !== -1 ? String(rows[i][statusColIdx] ?? "").trim().toUpperCase() : "DRAFT";
+                const imageSrc = imageSrcColIdx !== -1 ? String(rows[i][imageSrcColIdx] ?? "").trim() : "";
+                
+                updates.push({
+                  type: "create",
+                  sku,
+                  title,
+                  description,
+                  vendor,
+                  productType,
+                  tags,
+                  status: ["ACTIVE", "DRAFT", "ARCHIVED"].includes(status) ? status : "DRAFT",
+                  price: isNaN(price) ? 0 : price,
+                  compareAtPrice: compareAtPrice && !isNaN(compareAtPrice) ? compareAtPrice : null,
+                  inventory: isNaN(inventory) ? 0 : inventory,
+                  imageSrc,
+                  rowNumber: i
+                });
+                console.log(`[SYNC] Create Pending: SKU ${sku} -> "${title}"`);
+              } else {
+                syncResultsArr.push({ sku, status: "not_found", action: "missing_title", message: "SKU not in Shopify and title is empty", rowNumber: i });
+              }
+            } else {
+              syncResultsArr.push({ sku, status: "not_found", action: "no_shopify_match", message: "SKU not found in Shopify (no title column mapped for creation)", rowNumber: i });
+            }
             continue;
           }
 
@@ -740,16 +832,113 @@ async function startServer() {
         }
 
         // Track all SKUs queued for update
-        const updatedSkus = new Set<string>(updates.map((u: any) => u.sku));
+        const updatedSkus = new Set<string>(updates.filter((u: any) => u.type !== "create").map((u: any) => u.sku));
         updatedSkus.forEach(sku => {
           syncResultsArr.push({ sku, status: "updated", action: "sync_applied", message: "", rowNumber: 0 });
         });
 
-        if (updates.length === 0 && Object.keys(productUpdates).length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: 0, errorCount: 0, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
+        // ── Step 2a: Create new products (if any) ──
+        const createBatch = updates.filter((u: any) => u.type === "create");
+        let createdCount = 0;
+        if (createBatch.length > 0) {
+          console.log(`[SYNC] Creating ${createBatch.length} new products...`);
+          await updateSyncSession(shopDomain, { type: "progress", current: 0, total: createBatch.length, message: `Step 2a: Creating ${createBatch.length} new products...` });
+          
+          // Process creates in parallel (2 concurrent to be safe with product creation)
+          await parallelBatch(createBatch, async (item: any, idx: number) => {
+            if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
+            
+            const mutation = `mutation productCreate($input: ProductInput!) {
+              productCreate(input: $input) {
+                product {
+                  id
+                  variants(first: 1) {
+                    edges {
+                      node {
+                        id
+                        inventoryItem { id }
+                      }
+                    }
+                  }
+                }
+                userErrors { field message }
+              }
+            }`;
+            
+            const variables = {
+              input: {
+                title: item.title,
+                descriptionHtml: item.description || "",
+                vendor: item.vendor || "",
+                productType: item.productType || "",
+                tags: item.tags || [],
+                status: item.status || "DRAFT",
+                variants: [{
+                  sku: item.sku,
+                  price: String(item.price || 0),
+                  compareAtPrice: item.compareAtPrice ? String(item.compareAtPrice) : null,
+                }]
+              }
+            };
+            
+            const result = await shopifyGraphQL(shopDomain, accessToken, mutation, variables);
+            
+            if (result.errors) {
+              const msg = `Create Error (${item.sku}): ${result.errors[0]?.message || JSON.stringify(result.errors)}`;
+              console.error(`[SYNC] ${msg}`);
+              logs.push(msg);
+              syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: result.errors[0]?.message || "Unknown error", rowNumber: item.rowNumber });
+              return;
+            }
+            
+            const userErrors = result.data?.productCreate?.userErrors;
+            if (userErrors?.length > 0) {
+              const msg = `Create Error (${item.sku}): ${userErrors[0].message}`;
+              console.error(`[SYNC] ${msg}`);
+              logs.push(msg);
+              syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: userErrors[0].message, rowNumber: item.rowNumber });
+              return;
+            }
+            
+            const newProduct = result.data?.productCreate?.product;
+            if (newProduct) {
+              createdCount++;
+              syncResultsArr.push({ sku: item.sku, status: "updated", action: "created", message: "Product created in Shopify", rowNumber: item.rowNumber });
+              console.log(`[SYNC] Created: ${item.sku} -> ${newProduct.id}`);
+              
+              // Set inventory if we have a location and inventory value
+              if (locationId && item.inventory > 0) {
+                const variantNode = newProduct.variants?.edges?.[0]?.node;
+                const invItemId = variantNode?.inventoryItem?.id;
+                if (invItemId) {
+                  const invMutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
+                  const invVars = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: [{ inventoryItemId: invItemId, locationId: `gid://shopify/Location/${locationId}`, quantity: item.inventory }] } };
+                  await shopifyGraphQL(shopDomain, accessToken, invMutation, invVars);
+                }
+              }
+              
+              // Add image if provided
+              if (item.imageSrc) {
+                const safeSrc = item.imageSrc.replace(/"/g, '\\"');
+                const imgMutation = `mutation { productCreateMedia(productId: "${newProduct.id}", media: [{ mediaContentType: IMAGE, originalSource: "${safeSrc}" }]) { mediaUserErrors { message } } }`;
+                await shopifyGraphQL(shopDomain, accessToken, imgMutation);
+              }
+            }
+            
+            await updateSyncSession(shopDomain, { type: "progress", current: idx + 1, total: createBatch.length, message: `Step 2a: Creating products (${idx + 1}/${createBatch.length})...` });
+          }, 2);
+          
+          console.log(`[SYNC] Created ${createdCount} products`);
+        }
 
-        for (let i = 0; i < updates.length; i += 50) {
+        // Filter out create operations for remaining processing
+        const nonCreateUpdates = updates.filter((u: any) => u.type !== "create");
+
+        if (nonCreateUpdates.length === 0 && Object.keys(productUpdates).length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: createdCount, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
+
+        for (let i = 0; i < nonCreateUpdates.length; i += 50) {
           if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
-          const batch = updates.slice(i, i + 50);
+          const batch = nonCreateUpdates.slice(i, i + 50);
           const priceBatch = batch.filter((u: any) => u.type === "price");
           const invBatch = batch.filter((u: any) => u.type === "inv");
 
@@ -860,7 +1049,7 @@ async function startServer() {
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(pi + 25, productUpdateEntries.length), total: productUpdateEntries.length, message: "Step 3: Updating product fields (tags/status/images)..." });
         }
 
-        const totalUpdated = (updates.length - logs.length) + productUpdateCount;
+        const totalUpdated = createdCount + (nonCreateUpdates.length - logs.filter(l => !l.includes("Create Error")).length) + productUpdateCount;
         await updateSyncSession(shopDomain, { type: "complete", updatedCount: totalUpdated, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
       } catch (err: any) {
         console.error(`[SYNC] Global Error:`, err);

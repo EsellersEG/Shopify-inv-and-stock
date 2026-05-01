@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api } from "../../lib/api";
-import { Settings, RefreshCw, Database, CheckCircle2, AlertCircle, Play, Save, LayoutGrid, Store, X, MapPin, Filter, Clock } from "lucide-react";
+import { Settings, RefreshCw, Database, CheckCircle2, AlertCircle, Play, Save, LayoutGrid, Store, X, MapPin, Filter, Clock, ClipboardCheck } from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import FieldMapping from "./FieldMapping";
 import RulesBuilder from "./RulesBuilder";
 import SyncHistory from "./SyncHistory";
+import SyncValidation from "./SyncValidation";
 
 export default function SyncTool() {
   const location = useLocation();
@@ -33,9 +34,10 @@ export default function SyncTool() {
   const [syncMessage, setSyncMessage] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const [syncResult, setSyncResult] = useState<{ updated: number; errors: number; duration?: number } | null>(null);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
   const eventSourceRef = useRef<EventSource | null>(null);
-  const [currentView, setCurrentView] = useState<"sync" | "mapping" | "rules" | "history">("sync");
+  const [currentView, setCurrentView] = useState<"sync" | "mapping" | "rules" | "history" | "validation">("sync");
   const [storeChosen, setStoreChosen] = useState(false);
 
   useEffect(() => {
@@ -107,6 +109,8 @@ export default function SyncTool() {
           setSyncResult({ updated: data.updatedCount, errors: data.errorCount, duration: data.duration });
           setLogs(data.logs || []);
           setSyncMessage(data.duration ? `Success! Processed in ${(data.duration / 1000).toFixed(1)}s` : "Sync Complete");
+          // Auto-refresh history when sync completes
+          setHistoryRefreshKey(prev => prev + 1);
         } else if (data.type === 'error') {
           setSyncStatus("error");
           setLogs([data.message]);
@@ -325,6 +329,14 @@ export default function SyncTool() {
         >
           <span className="flex items-center gap-2"><Clock className="w-3.5 h-3.5" /> Sync History</span>
         </button>
+        <button
+          onClick={() => setCurrentView("validation")}
+          className={`px-6 py-3 text-xs font-black rounded-xl transition-all uppercase tracking-widest ${
+            currentView === "validation" ? "bg-white text-black shadow-lg ring-1 ring-black/5" : "text-gray-500 hover:text-black"
+          }`}
+        >
+          <span className="flex items-center gap-2"><ClipboardCheck className="w-3.5 h-3.5" /> Sync Validation</span>
+        </button>
       </div>
 
       {currentView === "mapping" && selectedStoreId && (
@@ -351,7 +363,11 @@ export default function SyncTool() {
       )}
 
       {currentView === "history" && (
-        <SyncHistory shopDomain={shopDomain || undefined} />
+        <SyncHistory key={historyRefreshKey} shopDomain={shopDomain || undefined} />
+      )}
+
+      {currentView === "validation" && (
+        <SyncValidation shopDomain={shopDomain || undefined} />
       )}
 
       {currentView === "sync" && (
