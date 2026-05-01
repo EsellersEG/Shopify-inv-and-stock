@@ -684,19 +684,35 @@ async function startServer() {
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(fetchedCount, skusArray.length), total: skusArray.length, message: `Step 1: Fetching products (${Math.round(fetchedCount / skusArray.length * 100)}%)...` });
         }, 4);
 
-        // ── Identify products to create (only in "Sync All" mode with title mapping) ──
+        // ── Extract ALL field mapping column indexes ──
         const titleColIdx = fieldMappings.title ? headers.indexOf(fieldMappings.title) : -1;
         const descColIdx = fieldMappings.description ? headers.indexOf(fieldMappings.description) : (fieldMappings.body_html ? headers.indexOf(fieldMappings.body_html) : -1);
         const vendorColIdx = fieldMappings.vendor ? headers.indexOf(fieldMappings.vendor) : -1;
         const productTypeColIdx = fieldMappings.product_type ? headers.indexOf(fieldMappings.product_type) : -1;
+        const handleColIdx = fieldMappings.handle ? headers.indexOf(fieldMappings.handle) : -1;
+        const barcodeColIdx = fieldMappings.variant_barcode ? headers.indexOf(fieldMappings.variant_barcode) : -1;
+        const weightColIdx = fieldMappings.variant_grams ? headers.indexOf(fieldMappings.variant_grams) : -1;
+        const weightUnitColIdx = fieldMappings.variant_weight_unit ? headers.indexOf(fieldMappings.variant_weight_unit) : -1;
+        const taxableColIdx = fieldMappings.variant_taxable ? headers.indexOf(fieldMappings.variant_taxable) : -1;
+        const requiresShippingColIdx = fieldMappings.variant_requires_shipping ? headers.indexOf(fieldMappings.variant_requires_shipping) : -1;
+        const option1NameColIdx = fieldMappings.option1_name ? headers.indexOf(fieldMappings.option1_name) : -1;
+        const option1ValueColIdx = fieldMappings.option1_value ? headers.indexOf(fieldMappings.option1_value) : -1;
+        const option2NameColIdx = fieldMappings.option2_name ? headers.indexOf(fieldMappings.option2_name) : -1;
+        const option2ValueColIdx = fieldMappings.option2_value ? headers.indexOf(fieldMappings.option2_value) : -1;
+        const option3NameColIdx = fieldMappings.option3_name ? headers.indexOf(fieldMappings.option3_name) : -1;
+        const option3ValueColIdx = fieldMappings.option3_value ? headers.indexOf(fieldMappings.option3_value) : -1;
+        const variantImageColIdx = fieldMappings.variant_image ? headers.indexOf(fieldMappings.variant_image) : -1;
+        
+        // Product creation only in "Sync All" mode with title mapping
         const canCreateProducts = syncMode === "all" && titleColIdx !== -1;
         
         if (canCreateProducts) {
           console.log(`[SYNC] Product creation enabled - syncMode=all and title column found at index ${titleColIdx}`);
+          console.log(`[SYNC] Field mappings: title=${titleColIdx}, desc=${descColIdx}, vendor=${vendorColIdx}, type=${productTypeColIdx}, handle=${handleColIdx}, barcode=${barcodeColIdx}, weight=${weightColIdx}, tags=${tagsColIdx}, status=${statusColIdx}, image=${imageSrcColIdx}`);
         }
 
         const updates: any[] = [];
-        const productUpdates: Record<string, { tags?: string[]; status?: string; imageSrc?: string }> = {};;
+        const productUpdates: Record<string, { tags?: string[]; status?: string; imageSrc?: string }> = {};
         
         for (let i = 1; i < rows.length; i++) {
           const sku = String(rows[i][skuIndex] || "").trim();
@@ -722,15 +738,32 @@ async function startServer() {
             if (canCreateProducts) {
               const title = String(rows[i][titleColIdx] ?? "").trim();
               if (title) {
+                // Extract ALL mapped fields from this row
                 const price = sheetPriceRaw ? parseFloat(String(sheetPriceRaw).replace(/[^\d.-]/g, "")) : 0;
                 const compareAtPrice = sheetCompareAtPriceRaw ? parseFloat(String(sheetCompareAtPriceRaw).replace(/[^\d.-]/g, "")) : null;
                 const inventory = sheetInvRaw ? parseInt(String(sheetInvRaw).replace(/[^\d-]/g, "")) : 0;
                 const description = descColIdx !== -1 ? String(rows[i][descColIdx] ?? "").trim() : "";
                 const vendor = vendorColIdx !== -1 ? String(rows[i][vendorColIdx] ?? "").trim() : "";
                 const productType = productTypeColIdx !== -1 ? String(rows[i][productTypeColIdx] ?? "").trim() : "";
+                const handle = handleColIdx !== -1 ? String(rows[i][handleColIdx] ?? "").trim() : "";
                 const tags = tagsColIdx !== -1 ? String(rows[i][tagsColIdx] ?? "").trim().split(",").map(t => t.trim()).filter(Boolean) : [];
                 const status = statusColIdx !== -1 ? String(rows[i][statusColIdx] ?? "").trim().toUpperCase() : "DRAFT";
                 const imageSrc = imageSrcColIdx !== -1 ? String(rows[i][imageSrcColIdx] ?? "").trim() : "";
+                const variantImage = variantImageColIdx !== -1 ? String(rows[i][variantImageColIdx] ?? "").trim() : "";
+                const barcode = barcodeColIdx !== -1 ? String(rows[i][barcodeColIdx] ?? "").trim() : "";
+                const weightRaw = weightColIdx !== -1 ? String(rows[i][weightColIdx] ?? "").trim() : "";
+                const weight = weightRaw ? parseFloat(weightRaw.replace(/[^\d.-]/g, "")) : null;
+                const weightUnit = weightUnitColIdx !== -1 ? String(rows[i][weightUnitColIdx] ?? "").trim().toUpperCase() : "GRAMS";
+                const taxableRaw = taxableColIdx !== -1 ? String(rows[i][taxableColIdx] ?? "").trim().toLowerCase() : "";
+                const taxable = taxableRaw === "true" || taxableRaw === "yes" || taxableRaw === "1";
+                const requiresShippingRaw = requiresShippingColIdx !== -1 ? String(rows[i][requiresShippingColIdx] ?? "").trim().toLowerCase() : "";
+                const requiresShipping = requiresShippingRaw !== "false" && requiresShippingRaw !== "no" && requiresShippingRaw !== "0";
+                const option1Name = option1NameColIdx !== -1 ? String(rows[i][option1NameColIdx] ?? "").trim() : "";
+                const option1Value = option1ValueColIdx !== -1 ? String(rows[i][option1ValueColIdx] ?? "").trim() : "";
+                const option2Name = option2NameColIdx !== -1 ? String(rows[i][option2NameColIdx] ?? "").trim() : "";
+                const option2Value = option2ValueColIdx !== -1 ? String(rows[i][option2ValueColIdx] ?? "").trim() : "";
+                const option3Name = option3NameColIdx !== -1 ? String(rows[i][option3NameColIdx] ?? "").trim() : "";
+                const option3Value = option3ValueColIdx !== -1 ? String(rows[i][option3ValueColIdx] ?? "").trim() : "";
                 
                 updates.push({
                   type: "create",
@@ -739,15 +772,28 @@ async function startServer() {
                   description,
                   vendor,
                   productType,
+                  handle,
                   tags,
                   status: ["ACTIVE", "DRAFT", "ARCHIVED"].includes(status) ? status : "DRAFT",
                   price: isNaN(price) ? 0 : price,
                   compareAtPrice: compareAtPrice && !isNaN(compareAtPrice) ? compareAtPrice : null,
                   inventory: isNaN(inventory) ? 0 : inventory,
                   imageSrc,
+                  variantImage,
+                  barcode,
+                  weight: weight && !isNaN(weight) ? weight : null,
+                  weightUnit: ["GRAMS", "KILOGRAMS", "OUNCES", "POUNDS"].includes(weightUnit) ? weightUnit : "GRAMS",
+                  taxable,
+                  requiresShipping,
+                  option1Name,
+                  option1Value,
+                  option2Name,
+                  option2Value,
+                  option3Name,
+                  option3Value,
                   rowNumber: i
                 });
-                console.log(`[SYNC] Create Pending: SKU ${sku} -> "${title}"`);
+                console.log(`[SYNC] Create Pending: SKU ${sku} -> "${title}" (barcode: ${barcode || "none"}, vendor: ${vendor || "none"})`);
               } else {
                 syncResultsArr.push({ sku, status: "not_found", action: "missing_title", message: "SKU not in Shopify and title is empty", rowNumber: i });
               }
@@ -848,7 +894,37 @@ async function startServer() {
           await parallelBatch(createBatch, async (item: any, idx: number) => {
             if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
             
-            // Step 1: Create product (without variants - API 2025-01 doesn't support variants in ProductInput)
+            // Build product input with ALL mapped fields
+            const productInput: any = {
+              title: item.title,
+              descriptionHtml: item.description || "",
+              vendor: item.vendor || "",
+              productType: item.productType || "",
+              tags: item.tags || [],
+              status: item.status || "DRAFT",
+            };
+            
+            // Add handle if provided
+            if (item.handle) {
+              productInput.handle = item.handle;
+            }
+            
+            // Add product options if provided (creates variant options)
+            const productOptions: any[] = [];
+            if (item.option1Name && item.option1Value) {
+              productOptions.push({ name: item.option1Name, values: [{ name: item.option1Value }] });
+            }
+            if (item.option2Name && item.option2Value) {
+              productOptions.push({ name: item.option2Name, values: [{ name: item.option2Value }] });
+            }
+            if (item.option3Name && item.option3Value) {
+              productOptions.push({ name: item.option3Name, values: [{ name: item.option3Value }] });
+            }
+            if (productOptions.length > 0) {
+              productInput.productOptions = productOptions;
+            }
+            
+            // Step 1: Create product
             const createMutation = `mutation productCreate($input: ProductInput!) {
               productCreate(input: $input) {
                 product {
@@ -866,18 +942,7 @@ async function startServer() {
               }
             }`;
             
-            const createVariables = {
-              input: {
-                title: item.title,
-                descriptionHtml: item.description || "",
-                vendor: item.vendor || "",
-                productType: item.productType || "",
-                tags: item.tags || [],
-                status: item.status || "DRAFT",
-              }
-            };
-            
-            const result = await shopifyGraphQL(shopDomain, accessToken, createMutation, createVariables);
+            const result = await shopifyGraphQL(shopDomain, accessToken, createMutation, { input: productInput });
             
             if (result.errors) {
               const msg = `Create Error (${item.sku}): ${result.errors[0]?.message || JSON.stringify(result.errors)}`;
@@ -902,58 +967,73 @@ async function startServer() {
               const variantId = variantNode?.id;
               const invItemId = variantNode?.inventoryItem?.id;
               let variantUpdateOk = true;
-              let skuUpdateOk = true;
+              let invUpdateOk = true;
               
-              // Step 2a: Update the default variant with price, compareAtPrice
+              // Step 2a: Update the default variant with price, compareAtPrice, barcode, taxable, requiresShipping
               if (variantId) {
+                const variantInput: any = {
+                  id: variantId,
+                  price: String(item.price || 0),
+                };
+                if (item.compareAtPrice) variantInput.compareAtPrice = String(item.compareAtPrice);
+                if (item.barcode) variantInput.barcode = item.barcode;
+                if (item.taxable !== undefined) variantInput.taxable = item.taxable;
+                // Note: requiresShipping is set via inventoryItem.requiresShipping in newer API
+                
                 const variantMutation = `mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
                   productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-                    productVariants { id sku }
+                    productVariants { id sku barcode }
                     userErrors { field message }
                   }
                 }`;
-                const variantVars = {
-                  productId: newProduct.id,
-                  variants: [{
-                    id: variantId,
-                    price: String(item.price || 0),
-                    compareAtPrice: item.compareAtPrice ? String(item.compareAtPrice) : null,
-                  }]
-                };
-                const variantResult = await shopifyGraphQL(shopDomain, accessToken, variantMutation, variantVars);
+                const variantResult = await shopifyGraphQL(shopDomain, accessToken, variantMutation, { productId: newProduct.id, variants: [variantInput] });
                 if (variantResult.data?.productVariantsBulkUpdate?.userErrors?.length > 0) {
                   const errMsg = variantResult.data.productVariantsBulkUpdate.userErrors[0].message;
-                  console.error(`[SYNC] Variant price update error for ${item.sku}:`, errMsg);
-                  logs.push(`Price update failed for ${item.sku}: ${errMsg}`);
+                  console.error(`[SYNC] Variant update error for ${item.sku}:`, errMsg);
+                  logs.push(`Variant update failed for ${item.sku}: ${errMsg}`);
                   variantUpdateOk = false;
+                } else {
+                  console.log(`[SYNC] Variant updated: ${item.sku} (price: ${item.price}, barcode: ${item.barcode || "none"})`);
                 }
               }
               
-              // Step 2b: Update inventory item with SKU (SKU lives on InventoryItem in API 2025-01)
-              if (invItemId && item.sku) {
-                const skuMutation = `mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
-                  inventoryItemUpdate(id: $id, input: $input) {
-                    inventoryItem { id sku }
-                    userErrors { field message }
+              // Step 2b: Update inventory item with SKU, weight, requiresShipping
+              if (invItemId) {
+                const invItemInput: any = {};
+                if (item.sku) invItemInput.sku = item.sku;
+                if (item.weight !== null && item.weight !== undefined) {
+                  invItemInput.measurement = {
+                    weight: {
+                      value: item.weight,
+                      unit: item.weightUnit || "GRAMS"
+                    }
+                  };
+                }
+                if (item.requiresShipping !== undefined) {
+                  invItemInput.requiresShipping = item.requiresShipping;
+                }
+                
+                if (Object.keys(invItemInput).length > 0) {
+                  const invItemMutation = `mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
+                    inventoryItemUpdate(id: $id, input: $input) {
+                      inventoryItem { id sku }
+                      userErrors { field message }
+                    }
+                  }`;
+                  const invItemResult = await shopifyGraphQL(shopDomain, accessToken, invItemMutation, { id: invItemId, input: invItemInput });
+                  if (invItemResult.data?.inventoryItemUpdate?.userErrors?.length > 0) {
+                    const errMsg = invItemResult.data.inventoryItemUpdate.userErrors[0].message;
+                    console.error(`[SYNC] Inventory item update error for ${item.sku}:`, errMsg);
+                    logs.push(`Inventory item update failed for ${item.sku}: ${errMsg}`);
+                    invUpdateOk = false;
+                  } else {
+                    console.log(`[SYNC] Inventory item updated: ${item.sku} (weight: ${item.weight || "none"})`);
                   }
-                }`;
-                const skuVars = {
-                  id: invItemId,
-                  input: { sku: item.sku }
-                };
-                const skuResult = await shopifyGraphQL(shopDomain, accessToken, skuMutation, skuVars);
-                if (skuResult.data?.inventoryItemUpdate?.userErrors?.length > 0) {
-                  const errMsg = skuResult.data.inventoryItemUpdate.userErrors[0].message;
-                  console.error(`[SYNC] SKU update error for ${item.sku}:`, errMsg);
-                  logs.push(`SKU update failed for ${item.sku}: ${errMsg}`);
-                  skuUpdateOk = false;
-                } else {
-                  console.log(`[SYNC] SKU set: ${item.sku} on ${invItemId}`);
                 }
               }
               
               createdCount++;
-              const statusMsg = (!variantUpdateOk || !skuUpdateOk) ? "Product created with partial errors" : "Product created in Shopify";
+              const statusMsg = (!variantUpdateOk || !invUpdateOk) ? "Product created with partial errors" : "Product created in Shopify";
               syncResultsArr.push({ sku: item.sku, status: "updated", action: "created", message: statusMsg, rowNumber: item.rowNumber });
               console.log(`[SYNC] Created: ${item.sku} -> ${newProduct.id}`);
               
@@ -962,11 +1042,24 @@ async function startServer() {
                 const invMutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
                 const invVars = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: [{ inventoryItemId: invItemId, locationId: `gid://shopify/Location/${locationId}`, quantity: item.inventory }] } };
                 await shopifyGraphQL(shopDomain, accessToken, invMutation, invVars);
+                console.log(`[SYNC] Inventory set: ${item.sku} -> ${item.inventory}`);
               }
               
-              // Step 4: Add image if provided
+              // Step 4: Add product image if provided
               if (item.imageSrc) {
                 const safeSrc = item.imageSrc.replace(/"/g, '\\"');
+                const imgMutation = `mutation { productCreateMedia(productId: "${newProduct.id}", media: [{ mediaContentType: IMAGE, originalSource: "${safeSrc}" }]) { mediaUserErrors { message } } }`;
+                const imgResult = await shopifyGraphQL(shopDomain, accessToken, imgMutation);
+                if (imgResult.data?.productCreateMedia?.mediaUserErrors?.length > 0) {
+                  console.error(`[SYNC] Image error for ${item.sku}:`, imgResult.data.productCreateMedia.mediaUserErrors[0].message);
+                } else {
+                  console.log(`[SYNC] Image added: ${item.sku}`);
+                }
+              }
+              
+              // Step 5: Add variant image if different from product image
+              if (item.variantImage && item.variantImage !== item.imageSrc) {
+                const safeSrc = item.variantImage.replace(/"/g, '\\"');
                 const imgMutation = `mutation { productCreateMedia(productId: "${newProduct.id}", media: [{ mediaContentType: IMAGE, originalSource: "${safeSrc}" }]) { mediaUserErrors { message } } }`;
                 await shopifyGraphQL(shopDomain, accessToken, imgMutation);
               }
