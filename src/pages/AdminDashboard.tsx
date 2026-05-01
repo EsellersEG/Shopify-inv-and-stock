@@ -4,7 +4,7 @@ import { Plus, Users, Store, Key, ChevronRight, Mail, UserPlus, Info, Database, 
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function AdminDashboard() {
-  const [activeTab, setActiveTab] = useState<'clients' | 'master-stores'>('clients');
+
   const [clients, setClients] = useState<any[]>([]);
   const [masterStores, setMasterStores] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -164,26 +164,7 @@ export default function AdminDashboard() {
           <h1 className="text-4xl font-black text-black tracking-tight uppercase italic">Master Panel</h1>
           <p className="text-gray-600 mt-2 font-medium">Internal Operations & Multi-Tenant Management</p>
         </div>
-        <div className="flex items-center space-x-3">
-          <button
-            onClick={() => {
-              setEditingStoreId(null);
-              setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', compareAtPriceCol: 'Compare At Price', inventoryCol: 'Inventory', fieldMappings: {}, metafieldMappings: [] });
-              setShowAddMasterStore(true);
-            }}
-            className="flex items-center space-x-2 bg-[#FFA500] hover:bg-orange-600 text-white px-6 py-3.5 rounded-2xl font-bold shadow-lg shadow-orange-500/20 transition-all active:scale-95 text-xs uppercase tracking-widest"
-          >
-            <Database className="w-4 h-4 text-white" />
-            <span>Register Store</span>
-          </button>
-          <button
-            onClick={() => setShowAddClient(true)}
-            className="flex items-center space-x-2 bg-[#FFA500] hover:bg-orange-600 text-white px-6 py-3.5 rounded-2xl font-bold shadow-lg shadow-orange-500/20 transition-all active:scale-95 text-xs uppercase tracking-widest"
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>Onboard Client</span>
-          </button>
-        </div>
+
       </header>
 
       {/* Stats Overview */}
@@ -206,125 +187,120 @@ export default function AdminDashboard() {
         ))}
       </div>
 
-      {/* Tabs */}
-      <div className="flex space-x-2 bg-gray-50 p-1.5 rounded-2xl w-fit border border-gray-100">
-        <button
-          onClick={() => setActiveTab('clients')}
-          className={`px-6 py-3 text-sm font-bold rounded-xl transition-all ${
-            activeTab === 'clients' ? "bg-white text-black shadow-lg ring-1 ring-black/5" : "text-gray-500 hover:text-black"
-          }`}
-        >
-          Clients ({clients.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('master-stores')}
-          className={`px-6 py-3 text-sm font-bold rounded-xl transition-all ${
-            activeTab === 'master-stores' ? "bg-white text-black shadow-lg ring-1 ring-black/5" : "text-gray-500 hover:text-black"
-          }`}
-        >
-          Store Database ({masterStores.length})
-        </button>
+      {/* ── Clients Section ─────────────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-2xl font-black text-black uppercase italic">Clients</h2>
+            <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">{clients.length} onboarded</p>
+          </div>
+          <button
+            onClick={() => setShowAddClient(true)}
+            className="flex items-center space-x-2 bg-black hover:bg-gray-800 text-white px-5 py-3 rounded-2xl font-bold shadow-lg transition-all active:scale-95 text-xs uppercase tracking-widest"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Add Client</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          {loading ? (
+            <div className="col-span-full p-16 text-center text-gray-400 bg-gray-50 rounded-[2.5rem] border border-dashed border-gray-200 font-black uppercase tracking-widest">Loading...</div>
+          ) : clients.length === 0 ? (
+            <div className="col-span-full p-16 text-center text-gray-400 bg-gray-50 rounded-[2.5rem] border border-dashed border-gray-200 font-black uppercase tracking-widest">No Clients Onboarded</div>
+          ) : clients.map((client) => (
+            <motion.div key={client.id} className="bg-white border border-gray-100 rounded-[2rem] p-7 hover:border-[#FFA500]/20 transition-all group relative overflow-hidden shadow-sm hover:shadow-xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#FFA500] to-orange-400 p-0.5 shadow-lg shadow-orange-500/20">
+                    <div className="w-full h-full bg-white rounded-[1.2rem] flex items-center justify-center text-black text-xl font-black">
+                      {client.name[0]}
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-black">{client.name}</h3>
+                    <span className="text-xs text-gray-400 font-medium">{client.email}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] text-[#FFA500] bg-[#FFA500]/5 px-3 py-1.5 rounded-xl font-black uppercase tracking-widest ring-1 ring-[#FFA500]/20">
+                    {client.stores?.length || 0} stores
+                  </span>
+                  <button
+                    onClick={() => setSelectedClient(client)}
+                    className="flex items-center space-x-1.5 bg-[#FFA500] hover:bg-orange-600 text-white px-4 py-2.5 rounded-xl font-black text-xs transition-all shadow-lg shadow-orange-500/20 uppercase tracking-widest"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Assign</span>
+                  </button>
+                </div>
+              </div>
+              {client.stores?.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {client.stores.map((s: any) => (
+                    <span key={s.id} className="text-[10px] bg-gray-50 border border-gray-100 rounded-lg px-3 py-1.5 font-bold text-gray-500 truncate max-w-[180px]">
+                      {s.name || s.shop_domain}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          ))}
+        </div>
       </div>
 
-      {activeTab === 'clients' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 space-y-4">
-             {loading ? (
-                <div className="p-20 text-center text-gray-500 bg-gray-50 rounded-[3rem] border border-dashed border-gray-200">Loading clients...</div>
-             ) : clients.length === 0 ? (
-                <div className="p-20 text-center text-gray-500 bg-gray-50 rounded-[3rem] border border-dashed border-gray-200 uppercase tracking-tighter font-black">No Clients Onboarded</div>
-             ) : clients.map((client) => (
-                <motion.div
-                  key={client.id}
-                  className="bg-white border border-gray-100 rounded-[2.5rem] p-8 hover:border-[#FFA500]/20 transition-all group relative overflow-hidden shadow-sm hover:shadow-xl"
-                >
-                   <div className="flex items-center justify-between relative z-10">
-                    <div className="flex items-center space-x-6">
-                      <div className="w-16 h-16 rounded-[1.5rem] bg-gradient-to-br from-[#FFA500] to-orange-400 p-0.5 shadow-lg shadow-orange-500/20">
-                        <div className="w-full h-full bg-white rounded-[1.4rem] flex items-center justify-center text-black text-2xl font-black">
-                          {client.name[0]}
-                        </div>
-                      </div>
-                      <div>
-                        <h3 className="text-2xl font-black text-black">{client.name}</h3>
-                        <div className="flex items-center space-x-4 mt-2 text-sm">
-                          <span className="flex items-center text-gray-500 font-medium"><Mail className="w-4 h-4 mr-2 text-[#FFA500]/50" /> {client.email}</span>
-                          <span className="flex items-center text-[#FFA500] bg-[#FFA500]/5 px-3 py-1 rounded-full text-xs font-bold ring-1 ring-[#FFA500]/20 uppercase">
-                             {client.stores?.length || 0} ACTIVE STORES
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => setSelectedClient(client)}
-                      className="flex items-center space-x-2 bg-[#FFA500] hover:bg-orange-600 text-white px-6 py-4 rounded-2xl font-black text-xs transition-all shadow-xl shadow-orange-500/20 uppercase tracking-widest"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>ASSIGN STORE</span>
-                    </button>
-                  </div>
-                </motion.div>
-             ))}
-          </div>
+      {/* ── Store Database Section ───────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-6">
           <div>
-            <div className="bg-gradient-to-br from-[#FFA500]/5 to-transparent border border-[#FFA500]/10 rounded-[2.5rem] p-10 sticky top-10">
-              <ShieldCheck className="w-10 h-10 text-[#FFA500] mb-6" />
-              <h3 className="text-2xl font-black text-black mb-4 italic uppercase">Security Note</h3>
-              <p className="text-gray-600 leading-relaxed text-sm mb-6 font-medium">
-                SyncFlow uses isolated tenant environments. Clients can only interact with Shopify stores that you link to their profile.
-              </p>
-              <div className="p-5 bg-black/5 rounded-2xl border border-black/5">
-                 <p className="text-[10px] text-gray-400 uppercase font-bold tracking-widest mb-2">Internal Rule</p>
-                 <p className="text-sm text-gray-700 font-medium italic">"One Store, Many Faces. Register once, assign to anyone."</p>
+            <h2 className="text-2xl font-black text-black uppercase italic">Store Database</h2>
+            <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">{masterStores.length} registered</p>
+          </div>
+          <button
+            onClick={() => {
+              setEditingStoreId(null);
+              setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', compareAtPriceCol: 'Compare At Price', inventoryCol: 'Inventory', fieldMappings: {}, metafieldMappings: [] });
+              setShowAddMasterStore(true);
+            }}
+            className="flex items-center space-x-2 bg-[#FFA500] hover:bg-orange-600 text-white px-5 py-3 rounded-2xl font-bold shadow-lg shadow-orange-500/20 transition-all active:scale-95 text-xs uppercase tracking-widest"
+          >
+            <Database className="w-4 h-4" />
+            <span>Register Store</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {masterStores.length === 0 ? (
+            <div className="col-span-full p-16 text-center text-gray-400 bg-gray-50 rounded-[2.5rem] border border-dashed border-gray-200 font-black uppercase tracking-widest">Database Empty</div>
+          ) : masterStores.map((store) => (
+            <div key={store.id} className="bg-white border border-gray-100 rounded-[2rem] p-7 space-y-5 shadow-sm hover:shadow-xl transition-all">
+              <div className="flex items-center justify-between">
+                <div className="p-3.5 bg-orange-500/5 rounded-xl">
+                  <Store className="w-5 h-5 text-[#FFA500]" />
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button onClick={() => handleEditStore(store)} className="p-2.5 bg-gray-50 hover:bg-black hover:text-white text-gray-600 rounded-xl transition-all border border-gray-100">
+                    <Edit2 className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => handleDeleteStore(store.id)} className="p-2.5 bg-gray-50 hover:bg-red-500 hover:text-white text-gray-400 rounded-xl transition-all border border-gray-100">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-black truncate">{store.name || 'Unlabeled Store'}</h3>
+                <p className="text-[10px] text-[#FFA500] font-black uppercase tracking-[0.15em] mt-1">{store.shop_domain}</p>
+                {store.spreadsheet_id && (
+                  <div className="flex items-center space-x-1.5 mt-3">
+                    <Database className="w-3 h-3 text-gray-300" />
+                    <p className="text-[10px] text-gray-400 font-mono truncate">{String(store.spreadsheet_id).slice(0, 22)}…</p>
+                  </div>
+                )}
               </div>
             </div>
-          </div>
+          ))}
         </div>
-      )}
-
-      {activeTab === 'master-stores' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-           {masterStores.length === 0 ? (
-              <div className="col-span-full p-20 text-center text-gray-500 bg-gray-50 rounded-[3rem] border border-dashed border-gray-200 uppercase tracking-tighter font-black">Database Empty</div>
-           ) : masterStores.map((store) => (
-              <div key={store.id} className="bg-white border border-gray-100 rounded-[2.5rem] p-8 space-y-6 shadow-sm hover:shadow-xl transition-all">
-                <div className="flex items-center justify-between">
-                   <div className="p-4 bg-orange-500/5 rounded-2xl">
-                      <Store className="w-6 h-6 text-[#FFA500]" />
-                   </div>
-                    <div className="flex items-center space-x-2">
-                       <button 
-                         onClick={() => handleEditStore(store)}
-                         className="p-2.5 bg-gray-50 hover:bg-black hover:text-white text-gray-600 rounded-xl transition-all border border-gray-100"
-                       >
-                         <Edit2 className="w-4 h-4" />
-                       </button>
-                       <button 
-                         onClick={() => handleDeleteStore(store.id)}
-                         className="p-2.5 bg-gray-50 hover:bg-red-500 hover:text-white text-gray-400 rounded-xl transition-all border border-gray-100"
-                       >
-                         <Trash2 className="w-4 h-4" />
-                       </button>
-                    </div>
-                </div>
-                <div>
-                   <h3 className="text-xl font-black text-black truncate">{store.name || 'Unlabeled Store'}</h3>
-                   <p className="text-[10px] text-[#FFA500] font-black uppercase tracking-[0.2em] mt-1">{store.shop_domain}</p>
-                   <div className="flex items-center space-x-2 mt-4">
-                      <Database className="w-3.5 h-3.5 text-gray-400" />
-                      <p className="text-xs text-gray-500 font-mono truncate">{store.spreadsheet_id}</p>
-                   </div>
-                </div>
-                <div className="pt-4 border-t border-gray-100 flex items-center justify-between">
-                   <div className="flex -space-x-2">
-                       <div className="w-8 h-8 rounded-full bg-black border-2 border-white flex items-center justify-center text-[10px] font-bold text-[#FFA500]">E</div>
-                   </div>
-                   <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Active Database Item</p>
-                </div>
-              </div>
-           ))}
-        </div>
-      )}
+      </div>
 
       {/* Modals */}
       <AnimatePresence>

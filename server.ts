@@ -122,6 +122,38 @@ async function initDatabase() {
   }
 
   console.log("Database tables ready.");
+
+  // Explicit creation for tables added after initial deployment (separate queries for reliability)
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS filter_rules (
+        id TEXT PRIMARY KEY,
+        store_id TEXT NOT NULL REFERENCES master_stores(id) ON DELETE CASCADE,
+        group_id INT DEFAULT 0,
+        field TEXT NOT NULL,
+        operator TEXT NOT NULL,
+        value TEXT DEFAULT '',
+        logical_operator TEXT DEFAULT 'AND',
+        order_index INT DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch (e) { console.error("filter_rules create failed:", e); }
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sync_results (
+        id TEXT PRIMARY KEY,
+        sync_log_id TEXT NOT NULL REFERENCES sync_logs(id) ON DELETE CASCADE,
+        shop_domain TEXT NOT NULL,
+        sku TEXT NOT NULL,
+        status TEXT NOT NULL,
+        action TEXT DEFAULT '',
+        message TEXT DEFAULT '',
+        row_number INT DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch (e) { console.error("sync_results create failed:", e); }
 }
 
 function evaluateRule(operator: string, fieldValue: string, ruleValue: string): boolean {

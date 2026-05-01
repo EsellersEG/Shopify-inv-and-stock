@@ -36,6 +36,7 @@ export default function SyncTool() {
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const [currentView, setCurrentView] = useState<"sync" | "mapping" | "rules" | "history">("sync");
+  const [storeChosen, setStoreChosen] = useState(false);
 
   useEffect(() => {
     fetchMyStores();
@@ -130,9 +131,16 @@ export default function SyncTool() {
     const data = await res.json();
     if (Array.isArray(data)) {
       setStores(data);
-      if (data.length > 0 && !location.state?.store) {
+      // If navigated with a specific store, apply it and skip picker
+      if (data.length > 0 && location.state?.store) {
+        applyStore(location.state.store);
+        setStoreChosen(true);
+      } else if (data.length === 1) {
+        // Only one store — auto-select and skip picker
         applyStore(data[0]);
+        setStoreChosen(true);
       }
+      // else: show picker
     }
   };
 
@@ -159,14 +167,14 @@ export default function SyncTool() {
     
     try {
       const token = localStorage.getItem('token');
+      const computedMode = syncPreset ?? "custom";
+      const computedFields = syncPreset ? [] : Array.from(customFields);
       const res = await fetch("/api/sync/sheets-to-shopify", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`
         },
-        const computedMode = syncPreset ?? "custom";
-        const computedFields = syncPreset ? [] : Array.from(customFields);
         body: JSON.stringify({
           shopDomain,
           accessToken,
@@ -211,12 +219,62 @@ export default function SyncTool() {
 
   return (
     <div className="max-w-6xl mx-auto pb-20 bg-white">
+
+      {/* ── Store Picker (shown until user selects a store) ───────────── */}
+      {!storeChosen && (
+        <div className="min-h-[70vh] flex flex-col items-center justify-center">
+          <div className="text-center mb-12">
+            <h1 className="text-4xl font-black text-black tracking-tight uppercase italic underline decoration-[#FFA500] underline-offset-8 mb-4">
+              Inventory Bridge
+            </h1>
+            <p className="text-gray-400 text-xs font-black uppercase tracking-widest">Select a store to continue</p>
+          </div>
+
+          {stores.length === 0 ? (
+            <div className="flex flex-col items-center gap-4 text-gray-400">
+              <Store className="w-12 h-12 text-gray-200" />
+              <p className="text-xs font-black uppercase tracking-widest">No stores assigned to your account</p>
+              <p className="text-xs text-gray-400 font-medium">Ask your admin to assign a store first</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 w-full max-w-3xl">
+              {stores.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => { applyStore(s); setStoreChosen(true); }}
+                  className="group bg-white border-2 border-gray-100 hover:border-[#FFA500] rounded-[2rem] p-8 text-left transition-all hover:shadow-2xl hover:shadow-orange-500/10 active:scale-95"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-orange-50 flex items-center justify-center mb-6 group-hover:bg-[#FFA500] transition-colors">
+                    <Store className="w-6 h-6 text-[#FFA500] group-hover:text-white transition-colors" />
+                  </div>
+                  <p className="font-black text-black text-base truncate">{s.name || "Unlabeled Store"}</p>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1 truncate">{s.shopDomain || s.shop_domain}</p>
+                  <div className="mt-5 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-[#FFA500] opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span>Select store</span>
+                    <span>→</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Main UI (shown after store is chosen) ────────────────────── */}
+      {storeChosen && (
+      <>
       <header className="flex items-center justify-between mb-12">
         <div>
           <h1 className="text-4xl font-black text-black tracking-tight uppercase italic underline decoration-[#FFA500] underline-offset-8">Inventory Bridge</h1>
           <p className="text-gray-500 mt-4 font-bold uppercase text-[10px] tracking-widest leading-relaxed">Automatic Stock & Price reconciliation for <span className="text-black italic font-black">{shopDomain || 'your store'}</span></p>
         </div>
         <div className="flex items-center space-x-4">
+          <button
+            onClick={() => setStoreChosen(false)}
+            className="text-xs font-black uppercase tracking-widest text-gray-400 hover:text-[#FFA500] transition-colors px-4 py-2 rounded-xl hover:bg-gray-50"
+          >
+            ← Change Store
+          </button>
           <div className="relative group">
             <Store className="absolute left-4 top-4 w-4 h-4 text-gray-300 group-focus-within:text-[#FFA500] transition-colors" />
             <select 
@@ -468,8 +526,8 @@ export default function SyncTool() {
         </div>
       </div>
       )}
+      </> /* end storeChosen */
+      )}
     </div>
   );
 }
-
-
