@@ -74,6 +74,30 @@ async function initDatabase() {
       logs TEXT[],
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS filter_rules (
+      id TEXT PRIMARY KEY,
+      store_id TEXT NOT NULL REFERENCES master_stores(id) ON DELETE CASCADE,
+      group_id INT DEFAULT 0,
+      field TEXT NOT NULL,
+      operator TEXT NOT NULL,
+      value TEXT DEFAULT '',
+      logical_operator TEXT DEFAULT 'AND',
+      order_index INT DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_results (
+      id TEXT PRIMARY KEY,
+      sync_log_id TEXT NOT NULL REFERENCES sync_logs(id) ON DELETE CASCADE,
+      shop_domain TEXT NOT NULL,
+      sku TEXT NOT NULL,
+      status TEXT NOT NULL,
+      action TEXT DEFAULT '',
+      message TEXT DEFAULT '',
+      row_number INT DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
   
   // Migration: Add name column to master_stores if it doesn't exist
@@ -105,6 +129,44 @@ async function initDatabase() {
   }
 
   console.log("Database tables ready.");
+}
+
+function evaluateRule(operator: string, fieldValue: string, ruleValue: string): boolean {
+  const fieldStr = String(fieldValue ?? "").trim();
+  const valueStr = String(ruleValue ?? "").trim();
+  switch (operator) {
+    case "equals": return fieldStr.toLowerCase() === valueStr.toLowerCase();
+    case "not_equals": return fieldStr.toLowerCase() !== valueStr.toLowerCase();
+    case "greater_than": { const fn = parseFloat(fieldStr), vn = parseFloat(valueStr); return !isNaN(fn) && !isNaN(vn) && fn > vn; }
+    case "less_than": { const fn = parseFloat(fieldStr), vn = parseFloat(valueStr); return !isNaN(fn) && !isNaN(vn) && fn < vn; }
+    case "greater_or_equal": { const fn = parseFloat(fieldStr), vn = parseFloat(valueStr); return !isNaN(fn) && !isNaN(vn) && fn >= vn; }
+    case "less_or_equal": { const fn = parseFloat(fieldStr), vn = parseFloat(valueStr); return !isNaN(fn) && !isNaN(vn) && fn <= vn; }
+    case "contains": return fieldStr.toLowerCase().includes(valueStr.toLowerCase());
+    case "not_contains": return !fieldStr.toLowerCase().includes(valueStr.toLowerCase());
+    case "contains_any": { const vals = valueStr.split(/[\s,\n]+/).filter((v: string) => v.length > 0); return vals.some((v: string) => fieldStr.toLowerCase() === v.toLowerCase()); }
+    case "not_contains_any": { const vals = valueStr.split(/[\s,\n]+/).filter((v: string) => v.length > 0); return !vals.some((v: string) => fieldStr.toLowerCase() === v.toLowerCase()); }
+    case "starts_with": return fieldStr.toLowerCase().startsWith(valueStr.toLowerCase());
+    case "ends_with": return fieldStr.toLowerCase().endsWith(valueStr.toLowerCase());
+    case "is_empty": return !fieldStr || fieldStr.length === 0;
+    case "is_not_empty": return !!(fieldStr && fieldStr.length > 0);
+    default: return false;
+  }
+}
+
+function evaluateRules(rules: any[], rowData: Record<string, string>): boolean {
+  if (!rules || rules.length === 0) return true;
+  let result = true;
+  for (let j = 0; j < rules.length; j++) {
+    const rule = rules[j];
+    const ruleResult = evaluateRule(rule.operator, rowData[rule.field] ?? "", rule.value ?? "");
+    if (j === 0) {
+      result = ruleResult;
+    } else {
+      const logic = (rule.logical_operator || "AND").toUpperCase();
+      result = logic === "OR" ? result || ruleResult : result && ruleResult;
+    }
+  }
+  return result;
 }
 
 async function startServer() {
@@ -359,18 +421,30 @@ async function startServer() {
       session.logs = data.logs || [];
       session.message = "Sync Complete";
       try {
+        const logId = data.syncLogId || randomUUID();
         await pool.query(
           "INSERT INTO sync_logs (id, shop_domain, status, message, updated_count, error_count, duration, logs) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-          [randomUUID(), shopDomain, "success", "Sync completed", data.updatedCount, data.errorCount, data.duration, data.logs || []]
+          [logId, shopDomain, "success", "Sync completed", data.updatedCount, data.errorCount, data.duration, data.logs || []]
         );
-      } catch {}
+        if (data.syncResults && data.syncResults.length > 0) {
+          for (let k = 0; k < data.syncResults.length; k += 100) {
+            const batch = data.syncResults.slice(k, k + 100);
+            const placeholders = batch.map((_: any, bi: number) => {
+              const base = bi * 8;
+              return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8})`;
+            }).join(',');
+            const values = batch.flatMap((r: any) => [randomUUID(), logId, shopDomain, r.sku, r.status, r.action, r.message || '', r.rowNumber]);
+            await pool.query(`INSERT INTO sync_results (id,sync_log_id,shop_domain,sku,status,action,message,row_number) VALUES ${placeholders}`, values);
+          }
+        }
+      } catch (e) { console.error("Failed to save sync log:", e); }
     } else if (data.type === "error") {
       session.status = "error";
       session.message = data.message;
       try {
         await pool.query(
           "INSERT INTO sync_logs (id, shop_domain, status, message, logs) VALUES ($1, $2, $3, $4, $5)",
-          [randomUUID(), shopDomain, "error", data.message, [data.message]]
+          [data.syncLogId || randomUUID(), shopDomain, "error", data.message, [data.message]]
         );
       } catch {}
     }
@@ -416,6 +490,20 @@ async function startServer() {
 
         if (skuIndex === -1) return await updateSyncSession(shopDomain, { type: "error", message: `SKU column "${mapping.sku}" not found in sheet` });
 
+        // Load filter rules for this store
+        const syncLogId = randomUUID();
+        const syncResultsArr: Array<{sku: string; status: string; action: string; message: string; rowNumber: number}> = [];
+        let filterRules: any[] = [];
+        try {
+          const { rows: storeRows } = await pool.query("SELECT id FROM master_stores WHERE shop_domain = $1", [shopDomain]);
+          const storeId = storeRows[0]?.id;
+          if (storeId) {
+            const { rows: ruleRows } = await pool.query("SELECT * FROM filter_rules WHERE store_id = $1 ORDER BY order_index ASC", [storeId]);
+            filterRules = ruleRows;
+            if (filterRules.length > 0) console.log(`[SYNC] Loaded ${filterRules.length} filter rules`);
+          }
+        } catch (e) { console.error("[SYNC] Failed to load filter rules:", e); }
+
         const shouldSyncPrice = syncMode === "price" || syncMode === "both";
         const shouldSyncStock = syncMode === "stock" || syncMode === "both";
 
@@ -457,13 +545,26 @@ async function startServer() {
         for (let i = 1; i < rows.length; i++) {
           const sku = String(rows[i][skuIndex] || "").trim();
           if (!sku) continue;
+
+          // Apply filter rules
+          if (filterRules.length > 0) {
+            const rowData: Record<string, string> = {};
+            headers.forEach((h: string, idx: number) => { rowData[h] = String(rows[i][idx] || "").trim(); });
+            if (!evaluateRules(filterRules, rowData)) {
+              syncResultsArr.push({ sku, status: "filtered", action: "excluded_by_rule", message: "Row excluded by filter rule", rowNumber: i });
+              continue;
+            }
+          }
           
           const sheetPriceRaw = rows[i][priceIndex];
           const sheetCompareAtPriceRaw = compareAtPriceIndex !== -1 ? rows[i][compareAtPriceIndex] : undefined;
           const sheetInvRaw = rows[i][invIndex];
           
           const shopify = shopifyVariants.get(sku);
-          if (!shopify) continue;
+          if (!shopify) {
+            syncResultsArr.push({ sku, status: "not_found", action: "no_shopify_match", message: "SKU not found in Shopify", rowNumber: i });
+            continue;
+          }
 
           if (shouldSyncPrice) {
             let priceChanged = false;
@@ -514,7 +615,13 @@ async function startServer() {
           }
         }
 
-        if (updates.length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: 0, errorCount: 0, logs, duration: Date.now() - startTime });
+        // Track all SKUs queued for update
+        const updatedSkus = new Set<string>(updates.map((u: any) => u.sku));
+        updatedSkus.forEach(sku => {
+          syncResultsArr.push({ sku, status: "updated", action: "sync_applied", message: "", rowNumber: 0 });
+        });
+
+        if (updates.length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: 0, errorCount: 0, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
 
         for (let i = 0; i < updates.length; i += 50) {
           if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
@@ -598,7 +705,7 @@ async function startServer() {
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(i + 50, updates.length), total: updates.length, message: `Step 2: Syncing updates to Shopify...` });
         }
 
-        await updateSyncSession(shopDomain, { type: "complete", updatedCount: updates.length - logs.length, errorCount: logs.length, logs, duration: Date.now() - startTime });
+        await updateSyncSession(shopDomain, { type: "complete", updatedCount: updates.length - logs.length, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
       } catch (err: any) {
         console.error(`[SYNC] Global Error:`, err);
         await updateSyncSession(shopDomain, { type: "error", message: err.message });
@@ -623,6 +730,131 @@ async function startServer() {
     const client = { id: Date.now(), res };
     syncSessions[shop].clients = [...(syncSessions[shop].clients || []), client];
     req.on("close", () => { syncSessions[shop].clients = syncSessions[shop].clients.filter((c: any) => c.id !== client.id); });
+  });
+
+  // ── Filter Rules CRUD ──────────────────────────────────────────────
+  app.get("/api/stores/:id/rules", authenticateToken, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    try {
+      const { rows } = await pool.query(
+        "SELECT * FROM filter_rules WHERE store_id = $1 ORDER BY order_index ASC",
+        [id]
+      );
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to fetch rules" });
+    }
+  });
+
+  app.post("/api/stores/:id/rules", authenticateToken, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { rules } = req.body;
+    try {
+      await pool.query("DELETE FROM filter_rules WHERE store_id = $1", [id]);
+      if (rules && rules.length > 0) {
+        for (let i = 0; i < rules.length; i++) {
+          const r = rules[i];
+          await pool.query(
+            "INSERT INTO filter_rules (id, store_id, group_id, field, operator, value, logical_operator, order_index) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            [randomUUID(), id, r.groupId || 0, r.field, r.operator, r.value || '', r.logicalOperator || 'AND', i]
+          );
+        }
+      }
+      res.json({ success: true, saved: rules?.length || 0 });
+    } catch (e: any) {
+      console.error("Failed to save rules:", e);
+      res.status(500).json({ error: "Failed to save rules" });
+    }
+  });
+
+  // Rules Preview – count rows that would pass the given rules against the sheet
+  app.post("/api/stores/:id/rules/preview", authenticateToken, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { rules } = req.body;
+    try {
+      const { rows: storeRows } = await pool.query("SELECT * FROM master_stores WHERE id = $1", [id]);
+      if (storeRows.length === 0) return res.status(404).json({ error: "Store not found" });
+      const store = storeRows[0];
+      const credentials = JSON.parse(store.service_account_json);
+      const auth = new google.auth.GoogleAuth({ credentials, scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"] });
+      const sheets = google.sheets({ version: "v4", auth });
+      const sheetRes = await sheets.spreadsheets.values.get({ spreadsheetId: store.spreadsheet_id, range: store.sheet_name || "Sheet1" });
+      const sheetRows = sheetRes.data.values;
+      if (!sheetRows || sheetRows.length < 2) return res.json({ total: 0, passing: 0 });
+      const headers = (sheetRows[0] || []).map((h: any) => String(h || "").trim());
+      const total = sheetRows.length - 1;
+      let passing = 0;
+      for (let i = 1; i < sheetRows.length; i++) {
+        const rowData: Record<string, string> = {};
+        headers.forEach((h: string, idx: number) => { rowData[h] = String(sheetRows[i][idx] || "").trim(); });
+        if (evaluateRules(rules || [], rowData)) passing++;
+      }
+      res.json({ total, passing });
+    } catch (e: any) {
+      console.error("Rules preview error:", e.message);
+      res.status(500).json({ error: "Failed to preview rules" });
+    }
+  });
+
+  // ── Sync History & Validation ────────────────────────────────────────
+  app.get("/api/sync/history", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      let shopDomains: string[] = [];
+      if (req.user.role === 'admin') {
+        const { rows } = await pool.query("SELECT shop_domain FROM master_stores");
+        shopDomains = rows.map((r: any) => r.shop_domain);
+      } else {
+        const { rows } = await pool.query(
+          "SELECT ms.shop_domain FROM master_stores ms JOIN store_assignments sa ON sa.master_store_id = ms.id WHERE sa.client_id = $1",
+          [req.user.id]
+        );
+        shopDomains = rows.map((r: any) => r.shop_domain);
+      }
+      if (shopDomains.length === 0) return res.json([]);
+      const placeholders = shopDomains.map((_: any, i: number) => `$${i + 1}`).join(',');
+      const { rows: logs } = await pool.query(
+        `SELECT * FROM sync_logs WHERE shop_domain IN (${placeholders}) ORDER BY created_at DESC LIMIT 200`,
+        shopDomains
+      );
+      res.json(logs);
+    } catch (e: any) {
+      console.error("Sync history error:", e);
+      res.status(500).json({ error: "Failed to fetch sync history" });
+    }
+  });
+
+  // Must come before /:logId/results to avoid route conflict
+  app.get("/api/sync/history/export.csv", authenticateToken, async (req: Request, res: Response) => {
+    const { logId } = req.query;
+    if (!logId) return res.status(400).json({ error: "logId required" });
+    try {
+      const { rows } = await pool.query(
+        "SELECT * FROM sync_results WHERE sync_log_id = $1 ORDER BY row_number ASC",
+        [logId]
+      );
+      const header = "sku,status,action,message,row_number,created_at";
+      const body = rows.map((r: any) =>
+        `"${r.sku}","${r.status}","${r.action}","${(r.message || '').replace(/"/g, '""')}",${r.row_number},"${r.created_at}"`
+      ).join('\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="sync-results-${logId}.csv"`);
+      res.send(header + '\n' + body);
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to export CSV" });
+    }
+  });
+
+  app.get("/api/sync/history/:logId/results", authenticateToken, async (req: Request, res: Response) => {
+    const { logId } = req.params;
+    try {
+      const { rows } = await pool.query(
+        "SELECT * FROM sync_results WHERE sync_log_id = $1 ORDER BY row_number ASC",
+        [logId]
+      );
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to fetch sync results" });
+    }
   });
 
   if (process.env.NODE_ENV !== "production") {

@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api } from "../../lib/api";
-import { Settings, RefreshCw, Database, CheckCircle2, AlertCircle, Play, Save, LayoutGrid, Store, X, MapPin } from "lucide-react";
+import { Settings, RefreshCw, Database, CheckCircle2, AlertCircle, Play, Save, LayoutGrid, Store, X, MapPin, Filter, Clock } from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import FieldMapping from "./FieldMapping";
+import RulesBuilder from "./RulesBuilder";
+import SyncHistory from "./SyncHistory";
 
 export default function SyncTool() {
   const location = useLocation();
@@ -32,7 +34,7 @@ export default function SyncTool() {
   const [syncResult, setSyncResult] = useState<{ updated: number; errors: number; duration?: number } | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
-  const [currentView, setCurrentView] = useState<"sync" | "mapping">("sync");
+  const [currentView, setCurrentView] = useState<"sync" | "mapping" | "rules" | "history">("sync");
 
   useEffect(() => {
     fetchMyStores();
@@ -245,6 +247,22 @@ export default function SyncTool() {
         >
           <span className="flex items-center gap-2"><MapPin className="w-3.5 h-3.5" /> Attribute Mapping</span>
         </button>
+        <button
+          onClick={() => setCurrentView("rules")}
+          className={`px-6 py-3 text-xs font-black rounded-xl transition-all uppercase tracking-widest ${
+            currentView === "rules" ? "bg-white text-black shadow-lg ring-1 ring-black/5" : "text-gray-500 hover:text-black"
+          }`}
+        >
+          <span className="flex items-center gap-2"><Filter className="w-3.5 h-3.5" /> Filter Rules</span>
+        </button>
+        <button
+          onClick={() => setCurrentView("history")}
+          className={`px-6 py-3 text-xs font-black rounded-xl transition-all uppercase tracking-widest ${
+            currentView === "history" ? "bg-white text-black shadow-lg ring-1 ring-black/5" : "text-gray-500 hover:text-black"
+          }`}
+        >
+          <span className="flex items-center gap-2"><Clock className="w-3.5 h-3.5" /> Sync History</span>
+        </button>
       </div>
 
       {currentView === "mapping" && selectedStoreId && (
@@ -258,6 +276,20 @@ export default function SyncTool() {
           compareAtPriceCol={compareAtPriceCol}
           inventoryCol={inventoryCol}
         />
+      )}
+
+      {currentView === "rules" && selectedStoreId && (
+        <RulesBuilder
+          storeId={selectedStoreId}
+          shopDomain={shopDomain}
+          spreadsheetId={spreadsheetId}
+          serviceAccountJson={serviceAccountJson}
+          sheetName={sheetName}
+        />
+      )}
+
+      {currentView === "history" && (
+        <SyncHistory shopDomain={shopDomain || undefined} />
       )}
 
       {currentView === "sync" && (
