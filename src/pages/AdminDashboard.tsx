@@ -32,6 +32,7 @@ export default function AdminDashboard() {
   const [selectedMasterStoreId, setSelectedMasterStoreId] = useState('');
   const [editingStoreId, setEditingStoreId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -61,19 +62,28 @@ export default function AdminDashboard() {
   const handleAddMasterStore = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setSaveError(null);
     try {
       const res = editingStoreId 
         ? await api.put(`/api/admin/master-stores/${editingStoreId}`, newMasterStore)
         : await api.post('/api/admin/master-stores', newMasterStore);
       
+      if (res.error) {
+        setSaveError(res.error);
+        return;
+      }
       if (res.id || res.success) {
         setShowAddMasterStore(false);
         setEditingStoreId(null);
+        setSaveError(null);
         setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', compareAtPriceCol: 'Compare At Price', inventoryCol: 'Inventory', fieldMappings: {}, metafieldMappings: [] });
         fetchData();
+      } else {
+        setSaveError('Unexpected response from server. Please try again.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setSaveError(err?.message || 'Network error. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -523,11 +533,14 @@ export default function AdminDashboard() {
                          </div>
                       </div>
                       <div className="col-span-full border-t border-gray-100 pt-6 mt-4">
-                         <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-3 ml-1">Service Account JSON</label>
+                         <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-3 ml-1">
+                           Service Account JSON
+                           {editingStoreId && <span className="ml-2 text-gray-300 normal-case tracking-normal font-medium">(leave blank to keep existing)</span>}
+                         </label>
                         <div className="relative">
                             <FileJson className="absolute left-5 top-5 w-5 h-5 text-gray-300" />
                             <textarea
-                              required
+                              required={!editingStoreId}
                               rows={5}
                               className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-5 pl-14 text-black placeholder-gray-400 outline-none focus:ring-2 focus:ring-[#FFA500] font-mono text-xs transition-all"
                               placeholder='{"type": "service_account", ...}'
@@ -537,10 +550,19 @@ export default function AdminDashboard() {
                         </div>
                      </div>
                   </div>
+                  {saveError && (
+                    <div className="col-span-full bg-red-50 border border-red-200 rounded-2xl px-6 py-4 flex items-start gap-3">
+                      <span className="text-red-500 text-lg leading-none mt-0.5">⚠</span>
+                      <div>
+                        <p className="text-xs font-black text-red-800 uppercase tracking-widest mb-0.5">Save Failed</p>
+                        <p className="text-sm text-red-700 font-medium">{saveError}</p>
+                      </div>
+                    </div>
+                  )}
                   <div className="flex items-center space-x-4 pt-8">
                     <button
                         type="button"
-                        onClick={() => setShowAddMasterStore(false)}
+                        onClick={() => { setShowAddMasterStore(false); setSaveError(null); }}
                         className="flex-1 py-5 px-8 bg-white border border-gray-200 text-black font-black rounded-2xl transition-all uppercase text-[10px] tracking-widest hover:bg-gray-50 active:scale-95"
                     >
                         Discard

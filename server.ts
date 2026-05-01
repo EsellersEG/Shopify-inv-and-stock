@@ -283,16 +283,24 @@ async function startServer() {
     const { id } = req.params;
     const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, compareAtPriceCol, inventoryCol, fieldMappings, metafieldMappings } = req.body;
     try {
+      // If serviceAccountJson is blank, keep the existing value in DB
+      let finalServiceAccountJson = serviceAccountJson;
+      if (!finalServiceAccountJson || String(finalServiceAccountJson).trim() === "") {
+        const { rows: existing } = await pool.query("SELECT service_account_json FROM master_stores WHERE id = $1", [id]);
+        if (existing.length === 0) return res.status(404).json({ error: "Store not found" });
+        finalServiceAccountJson = existing[0].service_account_json;
+      }
       const { rows } = await pool.query(
         `UPDATE master_stores 
          SET name = $1, shop_domain = $2, access_token = $3, spreadsheet_id = $4, service_account_json = $5, sheet_name = $6, sku_col = $7, price_col = $8, compare_at_price_col = $9, inventory_col = $10, field_mappings = $11, metafield_mappings = $12, updated_at = NOW()
          WHERE id = $13 RETURNING *`,
-        [name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", JSON.stringify(fieldMappings || {}), JSON.stringify(metafieldMappings || []), id]
+        [name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, finalServiceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", JSON.stringify(fieldMappings || {}), JSON.stringify(metafieldMappings || []), id]
       );
       if (rows.length === 0) return res.status(404).json({ error: "Store not found" });
       res.json(rows[0]);
     } catch (e: any) {
-      res.status(400).json({ error: "Store update failed or domain conflict" });
+      console.error("Update store error:", e);
+      res.status(400).json({ error: e.message || "Store update failed or domain conflict" });
     }
   });
 
