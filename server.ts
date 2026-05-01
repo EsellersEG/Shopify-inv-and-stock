@@ -194,6 +194,65 @@ function evaluateRules(rules: any[], rowData: Record<string, string>): boolean {
   return result;
 }
 
+// ── Shopify GraphQL helper with rate limiting & retry ──
+async function shopifyGraphQL(
+  shopDomain: string,
+  accessToken: string,
+  query: string,
+  variables?: any,
+  maxRetries = 5
+): Promise<{ data?: any; errors?: any[]; userErrors?: any[] }> {
+  let lastError: any;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const res = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
+      method: "POST",
+      headers: {
+        "X-Shopify-Access-Token": accessToken,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(variables ? { query, variables } : { query })
+    });
+
+    // Handle HTTP-level errors
+    if (!res.ok) {
+      const text = await res.text();
+      // 429 = rate limited at HTTP level
+      if (res.status === 429) {
+        const waitTime = Math.min(1000 * Math.pow(2, attempt), 10000);
+        console.log(`[RATE LIMIT] HTTP 429, waiting ${waitTime}ms before retry ${attempt + 1}/${maxRetries}`);
+        await new Promise(r => setTimeout(r, waitTime));
+        continue;
+      }
+      throw new Error(`Shopify API error ${res.status}: ${text.slice(0, 300)}`);
+    }
+
+    const data = await res.json();
+
+    // Check for GraphQL-level throttle
+    const isThrottled = data.errors?.some((e: any) =>
+      e.message?.toLowerCase().includes('throttled') ||
+      e.extensions?.code === 'THROTTLED'
+    );
+
+    if (isThrottled) {
+      const waitTime = Math.min(1000 * Math.pow(2, attempt), 10000);
+      console.log(`[RATE LIMIT] Throttled, waiting ${waitTime}ms before retry ${attempt + 1}/${maxRetries}`);
+      await new Promise(r => setTimeout(r, waitTime));
+      lastError = data.errors;
+      continue;
+    }
+
+    // Success - add a small delay to pace requests
+    await new Promise(r => setTimeout(r, 250));
+    return data;
+  }
+
+  // Max retries exceeded
+  console.error(`[RATE LIMIT] Max retries (${maxRetries}) exceeded`);
+  return { errors: lastError || [{ message: 'Max retries exceeded due to rate limiting' }] };
+}
+
 async function startServer() {
   // Init DB tables
   await initDatabase();
@@ -565,18 +624,7 @@ async function startServer() {
           const chunk = skusArray.slice(i, i + 100);
           const searchQuery = chunk.map((sku: any) => `sku:${JSON.stringify(String(sku))}`).join(" OR ");
           const gqlQuery = `query ($q: String!) { productVariants(first: 100, query: $q) { edges { node { id sku price compareAtPrice product { id } inventoryItem { id inventoryLevels(first: 1) { edges { node { quantities(names: ["available"]) { quantity } } } } } } } } }`;
-          const gqlRes = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
-            method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-            body: JSON.stringify({ query: gqlQuery, variables: { q: searchQuery } })
-          });
-          if (!gqlRes.ok) {
-            const text = await gqlRes.text();
-            const msg = `Shopify API error ${gqlRes.status}: ${text.slice(0, 300)}`;
-            console.error(`[SYNC] ${msg}`);
-            logs.push(msg);
-            continue;
-          }
-          const data = await gqlRes.json();
+          const data = await shopifyGraphQL(shopDomain, accessToken, gqlQuery, { q: searchQuery });
           if (data.errors) {
             const errMsg = Array.isArray(data.errors) ? (data.errors[0]?.message || JSON.stringify(data.errors)) : JSON.stringify(data.errors);
             console.error(`[SYNC] GraphQL Query Errors:`, JSON.stringify(data.errors));
@@ -734,11 +782,7 @@ async function startServer() {
             mutation += ` }`;
 
             console.log(`[SYNC] Price mutation: ${productIds.length} products, ${priceBatch.length} variants`);
-            const gqlRes = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
-              method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-              body: JSON.stringify({ query: mutation })
-            });
-            const result = await gqlRes.json();
+            const result = await shopifyGraphQL(shopDomain, accessToken, mutation);
             if (result.errors) {
               const msg = `GraphQL Price Error: ${result.errors[0]?.message || JSON.stringify(result.errors)}`;
               console.error(`[SYNC] ${msg}`);
@@ -760,11 +804,7 @@ async function startServer() {
           if (invBatch.length > 0) {
             const mutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
             const variables = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: invBatch.map((u: any) => ({ inventoryItemId: u.id, locationId: `gid://shopify/Location/${locationId}`, quantity: u.value })) } };
-            const invRes = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
-              method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-              body: JSON.stringify({ query: mutation, variables })
-            });
-            const result = await invRes.json();
+            const result = await shopifyGraphQL(shopDomain, accessToken, mutation, variables);
             if (result.errors) {
               const msg = `GraphQL Inventory Error: ${result.errors[0]?.message || JSON.stringify(result.errors)}`;
               console.error(`[SYNC] ${msg}`);
@@ -799,11 +839,7 @@ async function startServer() {
               mutation += ` p${idx}: productUpdate(input: { ${inputParts.join(", ")} }) { product { id } userErrors { message } }`;
             });
             mutation += " }";
-            const gqlRes = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
-              method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-              body: JSON.stringify({ query: mutation })
-            });
-            const result = await gqlRes.json();
+            const result = await shopifyGraphQL(shopDomain, accessToken, mutation);
             if (result.errors) logs.push(`Product Update Error: ${result.errors[0]?.message || JSON.stringify(result.errors)}`);
             Object.keys(result.data || {}).forEach(key => {
               const errs = result.data[key]?.userErrors;
@@ -816,11 +852,7 @@ async function startServer() {
             if (!upd.imageSrc) continue;
             const safeSrc = upd.imageSrc.replace(/"/g, '\\"');
             const imgMutation = `mutation { productCreateMedia(productId: "${productId}", media: [{ mediaContentType: IMAGE, originalSource: "${safeSrc}" }]) { mediaUserErrors { message } } }`;
-            const imgRes = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
-              method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
-              body: JSON.stringify({ query: imgMutation })
-            });
-            const imgResult = await imgRes.json();
+            const imgResult = await shopifyGraphQL(shopDomain, accessToken, imgMutation);
             const imgErrs = imgResult.data?.productCreateMedia?.mediaUserErrors;
             if (imgErrs?.length > 0) { logs.push(`Image Error: ${imgErrs[0].message}`); } else productUpdateCount++;
           }
