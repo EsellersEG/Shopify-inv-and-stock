@@ -293,7 +293,7 @@ async function startServer() {
     try {
       const id = randomUUID();
       const { rows } = await pool.query(
-        `INSERT INTO master_stores (id, name, "shopDomain", "accessToken", spreadsheet_id, service_account_json, sheet_name, sku_col, price_col, compare_at_price_col, inventory_col, field_mappings, metafield_mappings)
+        `INSERT INTO master_stores (id, name, shop_domain, access_token, spreadsheet_id, service_account_json, sheet_name, sku_col, price_col, compare_at_price_col, inventory_col, field_mappings, metafield_mappings)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
         [id, name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", JSON.stringify(fieldMappings || {}), JSON.stringify(metafieldMappings || [])]
       );
@@ -317,7 +317,7 @@ async function startServer() {
       }
       const { rows } = await pool.query(
         `UPDATE master_stores 
-         SET name = $1, "shopDomain" = $2, "accessToken" = $3, spreadsheet_id = $4, service_account_json = $5, sheet_name = $6, sku_col = $7, price_col = $8, compare_at_price_col = $9, inventory_col = $10, field_mappings = $11, metafield_mappings = $12, updated_at = NOW()
+         SET name = $1, shop_domain = $2, access_token = $3, spreadsheet_id = $4, service_account_json = $5, sheet_name = $6, sku_col = $7, price_col = $8, compare_at_price_col = $9, inventory_col = $10, field_mappings = $11, metafield_mappings = $12, updated_at = NOW()
          WHERE id = $13 RETURNING *`,
         [name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, finalServiceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", JSON.stringify(fieldMappings || {}), JSON.stringify(metafieldMappings || []), id]
       );
