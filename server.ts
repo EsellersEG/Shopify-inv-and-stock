@@ -77,7 +77,7 @@ async function initDatabase() {
 
     CREATE TABLE IF NOT EXISTS filter_rules (
       id TEXT PRIMARY KEY,
-      store_id TEXT NOT NULL REFERENCES master_stores(id) ON DELETE CASCADE,
+      shop_id TEXT NOT NULL REFERENCES master_stores(id) ON DELETE CASCADE,
       group_id INT DEFAULT 0,
       field TEXT NOT NULL,
       operator TEXT NOT NULL,
@@ -128,7 +128,7 @@ async function initDatabase() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS filter_rules (
         id TEXT PRIMARY KEY,
-        store_id TEXT NOT NULL REFERENCES master_stores(id) ON DELETE CASCADE,
+        shop_id TEXT NOT NULL REFERENCES master_stores(id) ON DELETE CASCADE,
         group_id INT DEFAULT 0,
         field TEXT NOT NULL,
         operator TEXT NOT NULL,
@@ -533,7 +533,7 @@ async function startServer() {
           const storeRow = storeRows[0];
           const storeId = storeRow?.id;
           if (storeId) {
-            const { rows: ruleRows } = await pool.query("SELECT * FROM filter_rules WHERE store_id = $1 ORDER BY order_index ASC", [storeId]);
+            const { rows: ruleRows } = await pool.query("SELECT * FROM filter_rules WHERE shop_id = $1 ORDER BY order_index ASC", [storeId]);
             filterRules = ruleRows;
             if (filterRules.length > 0) console.log(`[SYNC] Loaded ${filterRules.length} filter rules`);
           }
@@ -858,7 +858,7 @@ async function startServer() {
     const { id } = req.params;
     try {
       const { rows } = await pool.query(
-        "SELECT * FROM filter_rules WHERE store_id = $1 ORDER BY order_index ASC",
+        "SELECT * FROM filter_rules WHERE shop_id = $1 ORDER BY order_index ASC",
         [id]
       );
       res.json(rows);
@@ -871,12 +871,12 @@ async function startServer() {
     const { id } = req.params;
     const { rules } = req.body;
     try {
-      await pool.query("DELETE FROM filter_rules WHERE store_id = $1", [id]);
+      await pool.query("DELETE FROM filter_rules WHERE shop_id = $1", [id]);
       if (rules && rules.length > 0) {
         for (let i = 0; i < rules.length; i++) {
           const r = rules[i];
           await pool.query(
-            "INSERT INTO filter_rules (id, store_id, group_id, field, operator, value, logical_operator, order_index) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO filter_rules (id, shop_id, group_id, field, operator, value, logical_operator, order_index) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             [randomUUID(), id, r.groupId || 0, r.field, r.operator, r.value || '', r.logicalOperator || 'AND', i]
           );
         }

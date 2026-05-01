@@ -9,7 +9,7 @@ export default function Sidebar({ user, onLogout }: { user: any, onLogout: () =>
   const navItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     ...(isAdmin ? [{ name: 'Clients', path: '/clients', icon: Users }] : []),
-    { name: 'Inventory Sync', path: '/sync', icon: RefreshCw },
+    { name: 'Shopify Sync', path: '/sync', icon: RefreshCw },
     { name: 'Stores', path: '/stores', icon: Store },
   ];
 
