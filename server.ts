@@ -876,8 +876,8 @@ async function startServer() {
         for (let i = 0; i < rules.length; i++) {
           const r = rules[i];
           await pool.query(
-            "INSERT INTO filter_rules (id, shop_id, group_id, field, operator, value, logical_operator, order_index) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-            [randomUUID(), id, r.groupId || 0, r.field, r.operator, r.value || '', r.logicalOperator || 'AND', i]
+            "INSERT INTO filter_rules (id, shop_id, group_id, field, operator, value, logical_operator, order_index, is_active, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            [randomUUID(), id, r.groupId || 0, r.field, r.operator, r.value || '', r.logicalOperator || 'AND', i, true, new Date()]
           );
         }
       }
