@@ -243,8 +243,8 @@ async function shopifyGraphQL(
       continue;
     }
 
-    // Success - add a small delay to pace requests
-    await new Promise(r => setTimeout(r, 100));
+    // Success - add delay to pace requests (300ms for heavy mutations)
+    await new Promise(r => setTimeout(r, 300));
     return data;
   }
 
@@ -890,8 +890,9 @@ async function startServer() {
           console.log(`[SYNC] Creating ${createBatch.length} new products...`);
           await updateSyncSession(shopDomain, { type: "progress", current: 0, total: createBatch.length, message: `Step 2a: Creating ${createBatch.length} new products...` });
           
-          // Process creates in parallel (2 concurrent to be safe with product creation)
-          await parallelBatch(createBatch, async (item: any, idx: number) => {
+          // Process creates SEQUENTIALLY - each product needs 5-6 API calls, too many in parallel causes throttling
+          for (let idx = 0; idx < createBatch.length; idx++) {
+            const item = createBatch[idx];
             if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
             
             // Build product input with ALL mapped fields
@@ -1063,10 +1064,13 @@ async function startServer() {
                 const imgMutation = `mutation { productCreateMedia(productId: "${newProduct.id}", media: [{ mediaContentType: IMAGE, originalSource: "${safeSrc}" }]) { mediaUserErrors { message } } }`;
                 await shopifyGraphQL(shopDomain, accessToken, imgMutation);
               }
+              
+              // Add delay between full product creations to avoid throttling
+              await new Promise(r => setTimeout(r, 500));
             }
             
             await updateSyncSession(shopDomain, { type: "progress", current: idx + 1, total: createBatch.length, message: `Step 2a: Creating products (${idx + 1}/${createBatch.length})...` });
-          }, 2);
+          }
           
           console.log(`[SYNC] Created ${createdCount} products`);
         }
