@@ -462,7 +462,7 @@ async function startServer() {
   });
 
   app.post("/api/sync/sheets-to-shopify", authenticateToken, async (req: Request, res: Response) => {
-    const { shopDomain, accessToken, spreadsheetId, serviceAccountJson, mapping, sheetName, syncMode } = req.body;
+    const { shopDomain, accessToken, spreadsheetId, serviceAccountJson, mapping, sheetName, syncMode, fields: syncFields = [] } = req.body;
     if (syncSessions[shopDomain]?.status === "loading") return res.status(400).json({ error: "Sync already running" });
 
     syncSessions[shopDomain] = { status: "loading", progress: { current: 0, total: 0 }, message: "Starting...", logs: [], clients: syncSessions[shopDomain]?.clients || [], cancelled: false };
@@ -495,18 +495,32 @@ async function startServer() {
         const syncLogId = randomUUID();
         const syncResultsArr: Array<{sku: string; status: string; action: string; message: string; rowNumber: number}> = [];
         let filterRules: any[] = [];
+        let fieldMappings: Record<string, string> = {};
         try {
-          const { rows: storeRows } = await pool.query("SELECT id FROM master_stores WHERE shop_domain = $1", [shopDomain]);
-          const storeId = storeRows[0]?.id;
+          const { rows: storeRows } = await pool.query("SELECT id, field_mappings FROM master_stores WHERE shop_domain = $1", [shopDomain]);
+          const storeRow = storeRows[0];
+          const storeId = storeRow?.id;
           if (storeId) {
             const { rows: ruleRows } = await pool.query("SELECT * FROM filter_rules WHERE store_id = $1 ORDER BY order_index ASC", [storeId]);
             filterRules = ruleRows;
             if (filterRules.length > 0) console.log(`[SYNC] Loaded ${filterRules.length} filter rules`);
           }
-        } catch (e) { console.error("[SYNC] Failed to load filter rules:", e); }
+          if (storeRow?.field_mappings) {
+            try { fieldMappings = JSON.parse(storeRow.field_mappings); } catch {}
+          }
+        } catch (e) { console.error("[SYNC] Failed to load store config:", e); }
 
-        const shouldSyncPrice = syncMode === "price" || syncMode === "both";
-        const shouldSyncStock = syncMode === "stock" || syncMode === "both";
+        const shouldSyncPrice  = syncMode === "price" || syncMode === "both" || syncMode === "all" || syncMode === "all-no-images" || (syncFields as string[]).includes("price");
+        const shouldSyncStock  = syncMode === "stock" || syncMode === "both" || syncMode === "all" || syncMode === "all-no-images" || (syncFields as string[]).includes("stock");
+        const shouldSyncTags   = syncMode === "all" || syncMode === "all-no-images" || (syncFields as string[]).includes("tags");
+        const shouldSyncStatus = syncMode === "all" || syncMode === "all-no-images" || (syncFields as string[]).includes("status");
+        const shouldSyncImages = syncMode === "all" || (syncFields as string[]).includes("images");
+
+        // Product-level field column indexes (from stored field_mappings)
+        const tagsColIdx     = (shouldSyncTags   && fieldMappings.tags)                                               ? headers.indexOf(fieldMappings.tags)                                        : -1;
+        const statusColIdx   = (shouldSyncStatus && (fieldMappings.status || fieldMappings.published))                 ? headers.indexOf((fieldMappings.status || fieldMappings.published) as string): -1;
+        const imageSrcColIdx = (shouldSyncImages && fieldMappings.image_src)                                           ? headers.indexOf(fieldMappings.image_src)                                    : -1;
+        if (shouldSyncTags || shouldSyncStatus || shouldSyncImages) console.log(`[SYNC] Product field indexes: tags=${tagsColIdx}, status=${statusColIdx}, imageSrc=${imageSrcColIdx}`);
 
         let locationId = null;
         if (shouldSyncStock) {
@@ -542,6 +556,7 @@ async function startServer() {
         }
 
         const updates: any[] = [];
+        const productUpdates: Record<string, { tags?: string[]; status?: string; imageSrc?: string }> = {};
         
         for (let i = 1; i < rows.length; i++) {
           const sku = String(rows[i][skuIndex] || "").trim();
@@ -565,6 +580,31 @@ async function startServer() {
           if (!shopify) {
             syncResultsArr.push({ sku, status: "not_found", action: "no_shopify_match", message: "SKU not found in Shopify", rowNumber: i });
             continue;
+          }
+
+          // Collect product-level updates
+          if (shopify.productId) {
+            if (tagsColIdx !== -1) {
+              const raw = String(rows[i][tagsColIdx] ?? "").trim();
+              if (raw) {
+                productUpdates[shopify.productId] = productUpdates[shopify.productId] || {};
+                productUpdates[shopify.productId].tags = raw.split(",").map((t: string) => t.trim()).filter(Boolean);
+              }
+            }
+            if (statusColIdx !== -1) {
+              const rawStatus = String(rows[i][statusColIdx] ?? "").trim().toUpperCase();
+              if (rawStatus && ["ACTIVE", "DRAFT", "ARCHIVED"].includes(rawStatus)) {
+                productUpdates[shopify.productId] = productUpdates[shopify.productId] || {};
+                productUpdates[shopify.productId].status = rawStatus;
+              }
+            }
+            if (imageSrcColIdx !== -1) {
+              const raw = String(rows[i][imageSrcColIdx] ?? "").trim();
+              if (raw) {
+                productUpdates[shopify.productId] = productUpdates[shopify.productId] || {};
+                productUpdates[shopify.productId].imageSrc = raw;
+              }
+            }
           }
 
           if (shouldSyncPrice) {
@@ -622,7 +662,7 @@ async function startServer() {
           syncResultsArr.push({ sku, status: "updated", action: "sync_applied", message: "", rowNumber: 0 });
         });
 
-        if (updates.length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: 0, errorCount: 0, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
+        if (updates.length === 0 && Object.keys(productUpdates).length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: 0, errorCount: 0, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
 
         for (let i = 0; i < updates.length; i += 50) {
           if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
@@ -706,7 +746,55 @@ async function startServer() {
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(i + 50, updates.length), total: updates.length, message: `Step 2: Syncing updates to Shopify...` });
         }
 
-        await updateSyncSession(shopDomain, { type: "complete", updatedCount: updates.length - logs.length, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
+        // ── Step 3: Product-level updates (tags, status, images) ──
+        const productUpdateEntries = Object.entries(productUpdates);
+        let productUpdateCount = 0;
+        for (let pi = 0; pi < productUpdateEntries.length; pi += 25) {
+          if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
+          const chunk = productUpdateEntries.slice(pi, pi + 25);
+
+          // Tags + status via productUpdate
+          const tagsStatusChunk = chunk.filter(([, upd]) => upd.tags !== undefined || upd.status);
+          if (tagsStatusChunk.length > 0) {
+            let mutation = "mutation {";
+            tagsStatusChunk.forEach(([productId, upd], idx) => {
+              const inputParts: string[] = [`id: "${productId}"`];
+              if (upd.tags !== undefined) inputParts.push(`tags: ${JSON.stringify(upd.tags)}`);
+              if (upd.status) inputParts.push(`status: ${upd.status}`);
+              mutation += ` p${idx}: productUpdate(input: { ${inputParts.join(", ")} }) { product { id } userErrors { message } }`;
+            });
+            mutation += " }";
+            const gqlRes = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
+              method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
+              body: JSON.stringify({ query: mutation })
+            });
+            const result = await gqlRes.json();
+            if (result.errors) logs.push(`Product Update Error: ${result.errors[0]?.message || JSON.stringify(result.errors)}`);
+            Object.keys(result.data || {}).forEach(key => {
+              const errs = result.data[key]?.userErrors;
+              if (errs?.length > 0) { logs.push(`Product Field Error: ${errs[0].message}`); } else productUpdateCount++;
+            });
+          }
+
+          // Images via productCreateMedia
+          for (const [productId, upd] of chunk) {
+            if (!upd.imageSrc) continue;
+            const safeSrc = upd.imageSrc.replace(/"/g, '\\"');
+            const imgMutation = `mutation { productCreateMedia(productId: "${productId}", media: [{ mediaContentType: IMAGE, originalSource: "${safeSrc}" }]) { mediaUserErrors { message } } }`;
+            const imgRes = await fetch(`https://${shopDomain}/admin/api/2025-01/graphql.json`, {
+              method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
+              body: JSON.stringify({ query: imgMutation })
+            });
+            const imgResult = await imgRes.json();
+            const imgErrs = imgResult.data?.productCreateMedia?.mediaUserErrors;
+            if (imgErrs?.length > 0) { logs.push(`Image Error: ${imgErrs[0].message}`); } else productUpdateCount++;
+          }
+
+          await updateSyncSession(shopDomain, { type: "progress", current: Math.min(pi + 25, productUpdateEntries.length), total: productUpdateEntries.length, message: "Step 3: Updating product fields (tags/status/images)..." });
+        }
+
+        const totalUpdated = (updates.length - logs.length) + productUpdateCount;
+        await updateSyncSession(shopDomain, { type: "complete", updatedCount: totalUpdated, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
       } catch (err: any) {
         console.error(`[SYNC] Global Error:`, err);
         await updateSyncSession(shopDomain, { type: "error", message: err.message });

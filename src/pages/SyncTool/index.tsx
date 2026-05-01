@@ -27,7 +27,8 @@ export default function SyncTool() {
   const [inventoryCol, setInventoryCol] = useState("Inventory");
 
   const [syncStatus, setSyncStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [syncMode, setSyncMode] = useState<"both" | "stock" | "price">("both");
+  const [syncPreset, setSyncPreset] = useState<"all" | "all-no-images" | null>("all");
+  const [customFields, setCustomFields] = useState<Set<string>>(new Set());
   const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0 });
   const [syncMessage, setSyncMessage] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
@@ -164,13 +165,16 @@ export default function SyncTool() {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`
         },
+        const computedMode = syncPreset ?? "custom";
+        const computedFields = syncPreset ? [] : Array.from(customFields);
         body: JSON.stringify({
           shopDomain,
           accessToken,
           spreadsheetId,
           serviceAccountJson,
           sheetName,
-          syncMode,
+          syncMode: computedMode,
+          fields: computedFields,
           mapping: {
             sku: skuCol,
             price: priceCol,
@@ -310,29 +314,85 @@ export default function SyncTool() {
             Ready to synchronize <span className="text-[#FFA500] italic">"{storeName || shopDomain}"</span> credentials and mapping set in the master database.
           </p>
 
-          <div className="grid grid-cols-3 gap-6 mb-16 w-full max-w-xl">
-            {[
-              { id: 'both', name: 'Price & Stock' },
-              { id: 'stock', name: 'Stock Only' },
-              { id: 'price', name: 'Price Only' }
-            ].map(mode => (
-              <button
-                key={mode.id}
-                onClick={() => setSyncMode(mode.id as any)}
-                className={`py-5 rounded-2xl font-black text-xs uppercase tracking-widest border-2 transition-all ${
-                  syncMode === mode.id 
-                  ? "bg-[#FFA500] border-[#FFA500] text-white shadow-2xl shadow-orange-500/20 italic" 
-                  : "bg-white border-gray-100 text-gray-400 hover:border-[#FFA500] hover:text-[#FFA500]"
-                }`}
-              >
-                {mode.name}
-              </button>
-            ))}
+          {/* Sync Mode Selector */}
+          <div className="w-full max-w-2xl mb-12 space-y-5">
+            {/* Presets */}
+            <div className="grid grid-cols-2 gap-4">
+              {[
+                { id: "all",           label: "Sync All",             desc: "Complete product data" },
+                { id: "all-no-images", label: "Sync All (No Images)",  desc: "Faster — skips images" },
+              ].map((preset) => (
+                <button
+                  key={preset.id}
+                  onClick={() => { setSyncPreset(preset.id as any); setCustomFields(new Set()); }}
+                  className={`p-5 rounded-2xl border-2 transition-all text-left ${
+                    syncPreset === preset.id
+                      ? "bg-[#FFA500] border-[#FFA500] shadow-2xl shadow-orange-500/20"
+                      : "bg-white border-gray-100 hover:border-[#FFA500]"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 mb-1">
+                    <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                      syncPreset === preset.id ? "border-white" : "border-gray-300"
+                    }`}>
+                      {syncPreset === preset.id && <div className="w-2 h-2 rounded-full bg-white" />}
+                    </div>
+                    <span className={`font-black text-xs uppercase tracking-widest ${
+                      syncPreset === preset.id ? "text-white italic" : "text-gray-600"
+                    }`}>{preset.label}</span>
+                  </div>
+                  <p className={`text-[10px] font-medium ml-6.5 ${
+                    syncPreset === preset.id ? "text-white/70" : "text-gray-400"
+                  }`}>{preset.desc}</p>
+                </button>
+              ))}
+            </div>
+
+            {/* Custom field checkboxes */}
+            <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-5">Or select specific fields to sync:</p>
+              <div className="flex flex-wrap gap-3">
+                {[
+                  { id: "stock",  label: "Stock"  },
+                  { id: "price",  label: "Price"  },
+                  { id: "tags",   label: "Tags"   },
+                  { id: "status", label: "Status" },
+                  { id: "images", label: "Images" },
+                ].map((field) => {
+                  const checked = customFields.has(field.id);
+                  return (
+                    <button
+                      key={field.id}
+                      onClick={() => {
+                        setSyncPreset(null);
+                        setCustomFields((prev) => {
+                          const next = new Set(prev);
+                          checked ? next.delete(field.id) : next.add(field.id);
+                          return next;
+                        });
+                      }}
+                      className={`flex items-center gap-2.5 px-5 py-3 rounded-xl border-2 text-xs font-black uppercase tracking-widest transition-all ${
+                        checked
+                          ? "bg-[#FFA500] border-[#FFA500] text-white shadow-lg shadow-orange-500/20 italic"
+                          : "bg-gray-50 border-gray-100 text-gray-500 hover:border-[#FFA500] hover:text-[#FFA500]"
+                      }`}
+                    >
+                      <div className={`w-3.5 h-3.5 rounded border-2 flex items-center justify-center shrink-0 ${
+                        checked ? "border-white/60 bg-white/20" : "border-gray-300"
+                      }`}>
+                        {checked && <div className="w-1.5 h-1.5 rounded-sm bg-white" />}
+                      </div>
+                      {field.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
           <button
              onClick={handleSync}
-             disabled={syncStatus === "loading"}
+             disabled={syncStatus === "loading" || (!syncPreset && customFields.size === 0)}
              className="w-full max-w-md py-8 bg-[#FFA500] hover:bg-orange-600 text-white font-black text-xs rounded-2xl disabled:opacity-50 transition-all flex items-center justify-center space-x-4 shadow-2xl shadow-orange-500/30 uppercase tracking-[0.2em] italic"
           >
             {syncStatus === "loading" ? <RefreshCw className="w-6 h-6 animate-spin" /> : <Play className="w-6 h-6 fill-white" />}
