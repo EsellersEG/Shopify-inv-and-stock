@@ -848,7 +848,8 @@ async function startServer() {
           await parallelBatch(createBatch, async (item: any, idx: number) => {
             if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
             
-            const mutation = `mutation productCreate($input: ProductInput!) {
+            // Step 1: Create product (without variants - API 2025-01 doesn't support variants in ProductInput)
+            const createMutation = `mutation productCreate($input: ProductInput!) {
               productCreate(input: $input) {
                 product {
                   id
@@ -865,7 +866,7 @@ async function startServer() {
               }
             }`;
             
-            const variables = {
+            const createVariables = {
               input: {
                 title: item.title,
                 descriptionHtml: item.description || "",
@@ -873,15 +874,10 @@ async function startServer() {
                 productType: item.productType || "",
                 tags: item.tags || [],
                 status: item.status || "DRAFT",
-                variants: [{
-                  sku: item.sku,
-                  price: String(item.price || 0),
-                  compareAtPrice: item.compareAtPrice ? String(item.compareAtPrice) : null,
-                }]
               }
             };
             
-            const result = await shopifyGraphQL(shopDomain, accessToken, mutation, variables);
+            const result = await shopifyGraphQL(shopDomain, accessToken, createMutation, createVariables);
             
             if (result.errors) {
               const msg = `Create Error (${item.sku}): ${result.errors[0]?.message || JSON.stringify(result.errors)}`;
@@ -902,22 +898,45 @@ async function startServer() {
             
             const newProduct = result.data?.productCreate?.product;
             if (newProduct) {
+              const variantNode = newProduct.variants?.edges?.[0]?.node;
+              const variantId = variantNode?.id;
+              const invItemId = variantNode?.inventoryItem?.id;
+              
+              // Step 2: Update the default variant with SKU, price, compareAtPrice
+              if (variantId) {
+                const variantMutation = `mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+                  productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+                    productVariants { id sku }
+                    userErrors { field message }
+                  }
+                }`;
+                const variantVars = {
+                  productId: newProduct.id,
+                  variants: [{
+                    id: variantId,
+                    sku: item.sku,
+                    price: String(item.price || 0),
+                    compareAtPrice: item.compareAtPrice ? String(item.compareAtPrice) : null,
+                  }]
+                };
+                const variantResult = await shopifyGraphQL(shopDomain, accessToken, variantMutation, variantVars);
+                if (variantResult.data?.productVariantsBulkUpdate?.userErrors?.length > 0) {
+                  console.error(`[SYNC] Variant update error for ${item.sku}:`, variantResult.data.productVariantsBulkUpdate.userErrors);
+                }
+              }
+              
               createdCount++;
               syncResultsArr.push({ sku: item.sku, status: "updated", action: "created", message: "Product created in Shopify", rowNumber: item.rowNumber });
               console.log(`[SYNC] Created: ${item.sku} -> ${newProduct.id}`);
               
-              // Set inventory if we have a location and inventory value
-              if (locationId && item.inventory > 0) {
-                const variantNode = newProduct.variants?.edges?.[0]?.node;
-                const invItemId = variantNode?.inventoryItem?.id;
-                if (invItemId) {
-                  const invMutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
-                  const invVars = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: [{ inventoryItemId: invItemId, locationId: `gid://shopify/Location/${locationId}`, quantity: item.inventory }] } };
-                  await shopifyGraphQL(shopDomain, accessToken, invMutation, invVars);
-                }
+              // Step 3: Set inventory if we have a location and inventory value
+              if (locationId && item.inventory > 0 && invItemId) {
+                const invMutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
+                const invVars = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: [{ inventoryItemId: invItemId, locationId: `gid://shopify/Location/${locationId}`, quantity: item.inventory }] } };
+                await shopifyGraphQL(shopDomain, accessToken, invMutation, invVars);
               }
               
-              // Add image if provided
+              // Step 4: Add image if provided
               if (item.imageSrc) {
                 const safeSrc = item.imageSrc.replace(/"/g, '\\"');
                 const imgMutation = `mutation { productCreateMedia(productId: "${newProduct.id}", media: [{ mediaContentType: IMAGE, originalSource: "${safeSrc}" }]) { mediaUserErrors { message } } }`;
