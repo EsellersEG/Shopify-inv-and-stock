@@ -100,32 +100,25 @@ async function initDatabase() {
     );
   `);
   
-  // Migration: Add name column to master_stores if it doesn't exist
-  try {
-    await pool.query("ALTER TABLE master_stores ADD COLUMN IF NOT EXISTS name TEXT DEFAULT 'Unlabeled Store'");
-  } catch (e) {
-    console.error("Migration failed or column already exists:", e);
-  }
-
-  // Migration: Add compare_at_price_col column
-  try {
-    await pool.query("ALTER TABLE master_stores ADD COLUMN IF NOT EXISTS compare_at_price_col TEXT DEFAULT 'Compare At Price'");
-  } catch (e) {
-    console.error("Migration for compare_at_price_col failed:", e);
-  }
-
-  // Migration: Add field_mappings JSON column for extended Shopify field mapping
-  try {
-    await pool.query("ALTER TABLE master_stores ADD COLUMN IF NOT EXISTS field_mappings TEXT DEFAULT '{}'");
-  } catch (e) {
-    console.error("Migration for field_mappings failed:", e);
-  }
-
-  // Migration: Add metafield_mappings JSON column
-  try {
-    await pool.query("ALTER TABLE master_stores ADD COLUMN IF NOT EXISTS metafield_mappings TEXT DEFAULT '[]'");
-  } catch (e) {
-    console.error("Migration for metafield_mappings failed:", e);
+  // Migration: Add all potentially missing columns to master_stores
+  const masterStoresMigrations: [string, string][] = [
+    ["name",                 "TEXT NOT NULL DEFAULT 'Unlabeled Store'"],
+    ["spreadsheet_id",       "TEXT NOT NULL DEFAULT ''"],
+    ["service_account_json", "TEXT NOT NULL DEFAULT ''"],
+    ["sheet_name",           "TEXT DEFAULT 'Sheet1'"],
+    ["sku_col",              "TEXT DEFAULT 'SKU'"],
+    ["price_col",            "TEXT DEFAULT 'Price'"],
+    ["compare_at_price_col", "TEXT DEFAULT 'Compare At Price'"],
+    ["inventory_col",        "TEXT DEFAULT 'Inventory'"],
+    ["field_mappings",       "TEXT DEFAULT '{}'"],
+    ["metafield_mappings",   "TEXT DEFAULT '[]'"],
+  ];
+  for (const [col, def] of masterStoresMigrations) {
+    try {
+      await pool.query(`ALTER TABLE master_stores ADD COLUMN IF NOT EXISTS ${col} ${def}`);
+    } catch (e) {
+      console.error(`Migration for ${col} failed:`, e);
+    }
   }
 
   console.log("Database tables ready.");
