@@ -574,10 +574,18 @@ async function startServer() {
             method: "POST", headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
             body: JSON.stringify({ query: gqlQuery, variables: { q: searchQuery } })
           });
+          if (!gqlRes.ok) {
+            const text = await gqlRes.text();
+            const msg = `Shopify API error ${gqlRes.status}: ${text.slice(0, 300)}`;
+            console.error(`[SYNC] ${msg}`);
+            logs.push(msg);
+            continue;
+          }
           const data = await gqlRes.json();
           if (data.errors) {
+            const errMsg = Array.isArray(data.errors) ? (data.errors[0]?.message || JSON.stringify(data.errors)) : JSON.stringify(data.errors);
             console.error(`[SYNC] GraphQL Query Errors:`, JSON.stringify(data.errors));
-            logs.push(`GraphQL fetch error: ${data.errors[0]?.message || JSON.stringify(data.errors[0])}`);
+            logs.push(`GraphQL error: ${errMsg}`);
           }
           data.data?.productVariants?.edges?.forEach((e: any) => {
             const node = e.node;
