@@ -284,8 +284,8 @@ async function startServer() {
 
   // Admin: Get Master Stores
   app.get("/api/admin/master-stores", authenticateToken, isAdmin, async (req: Request, res: Response) => {
-    const { rows } = await pool.query("SELECT * FROM master_stores ORDER BY created_at DESC");
-    res.json(rows);
+    const { rows } = await pool.query("SELECT * FROM master_stores");
+    res.json(rows.map(normalizeStore));
   });
 
   app.post("/api/admin/master-stores", authenticateToken, isAdmin, async (req: Request, res: Response) => {
@@ -293,11 +293,11 @@ async function startServer() {
     try {
       const id = randomUUID();
       const { rows } = await pool.query(
-        `INSERT INTO master_stores (id, name, shop_domain, access_token, spreadsheet_id, service_account_json, sheet_name, sku_col, price_col, compare_at_price_col, inventory_col, field_mappings, metafield_mappings)
+        `INSERT INTO master_stores (id, name, "shopDomain", "accessToken", spreadsheet_id, service_account_json, sheet_name, sku_col, price_col, compare_at_price_col, inventory_col, field_mappings, metafield_mappings)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
         [id, name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", JSON.stringify(fieldMappings || {}), JSON.stringify(metafieldMappings || [])]
       );
-      res.json(rows[0]);
+      res.json(normalizeStore(rows[0]));
     } catch (e: any) {
       res.status(400).json({ error: "Store domain already exists" });
     }
@@ -317,12 +317,12 @@ async function startServer() {
       }
       const { rows } = await pool.query(
         `UPDATE master_stores 
-         SET name = $1, shop_domain = $2, access_token = $3, spreadsheet_id = $4, service_account_json = $5, sheet_name = $6, sku_col = $7, price_col = $8, compare_at_price_col = $9, inventory_col = $10, field_mappings = $11, metafield_mappings = $12, updated_at = NOW()
+         SET name = $1, "shopDomain" = $2, "accessToken" = $3, spreadsheet_id = $4, service_account_json = $5, sheet_name = $6, sku_col = $7, price_col = $8, compare_at_price_col = $9, inventory_col = $10, field_mappings = $11, metafield_mappings = $12, updated_at = NOW()
          WHERE id = $13 RETURNING *`,
         [name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, finalServiceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", JSON.stringify(fieldMappings || {}), JSON.stringify(metafieldMappings || []), id]
       );
       if (rows.length === 0) return res.status(404).json({ error: "Store not found" });
-      res.json(rows[0]);
+      res.json(normalizeStore(rows[0]));
     } catch (e: any) {
       console.error("Update store error:", e);
       res.status(400).json({ error: e.message || "Store update failed or domain conflict" });
@@ -365,46 +365,41 @@ async function startServer() {
   });
 
   // Client: Get My Stores
+  // Helper: normalize master_stores row (handles both camelCase and snake_case DB columns)
+  let _storeColumnsLogged = false;
+  const normalizeStore = (r: any) => {
+    if (!_storeColumnsLogged) {
+      console.log("[DB DEBUG] master_stores column keys:", Object.keys(r));
+      _storeColumnsLogged = true;
+    }
+    return {
+      id: r.id,
+      name: r.name,
+      shopDomain: r.shop_domain || r.shopDomain,
+      accessToken: r.access_token || r.accessToken,
+      spreadsheetId: r.spreadsheet_id || r.spreadsheetId,
+      serviceAccountJson: r.service_account_json || r.serviceAccountJson,
+      sheet_name: r.sheet_name || r.sheetName,
+      sku_col: r.sku_col || r.skuCol,
+      price_col: r.price_col || r.priceCol,
+      compare_at_price_col: r.compare_at_price_col || r.compareAtPriceCol,
+      inventory_col: r.inventory_col || r.inventoryCol,
+      field_mappings: r.field_mappings || r.fieldMappings,
+      metafield_mappings: r.metafield_mappings || r.metafieldMappings,
+      created_at: r.created_at || r.installedAt,
+    };
+  };
+
   app.get("/api/client/stores", authenticateToken, async (req: Request, res: Response) => {
     if (req.user.role === 'admin') {
-      const { rows } = await pool.query("SELECT * FROM master_stores ORDER BY created_at DESC");
-      return res.json(rows.map(r => ({
-        id: r.id,
-        name: r.name,
-        shopDomain: r.shop_domain,
-        accessToken: r.access_token,
-        spreadsheetId: r.spreadsheet_id,
-        serviceAccountJson: r.service_account_json,
-        sheet_name: r.sheet_name,
-        sku_col: r.sku_col,
-        price_col: r.price_col,
-        compare_at_price_col: r.compare_at_price_col,
-        inventory_col: r.inventory_col,
-        field_mappings: r.field_mappings,
-        metafield_mappings: r.metafield_mappings,
-        created_at: r.created_at
-      })));
+      const { rows } = await pool.query("SELECT * FROM master_stores");
+      return res.json(rows.map(normalizeStore));
     }
     const { rows } = await pool.query(
       "SELECT ms.* FROM master_stores ms JOIN store_assignments sa ON sa.master_store_id = ms.id WHERE sa.client_id = $1",
       [req.user.id]
     );
-    res.json(rows.map(r => ({
-      id: r.id,
-      name: r.name,
-      shopDomain: r.shop_domain,
-      accessToken: r.access_token,
-      spreadsheetId: r.spreadsheet_id,
-      serviceAccountJson: r.service_account_json,
-      sheet_name: r.sheet_name,
-      sku_col: r.sku_col,
-      price_col: r.price_col,
-      compare_at_price_col: r.compare_at_price_col,
-      inventory_col: r.inventory_col,
-      field_mappings: r.field_mappings,
-      metafield_mappings: r.metafield_mappings,
-      created_at: r.created_at
-    })));
+    res.json(rows.map(normalizeStore));
   });
 
   // Get sheet headers and first row preview for a store
@@ -413,12 +408,12 @@ async function startServer() {
     try {
       const { rows } = await pool.query("SELECT * FROM master_stores WHERE id = $1", [id]);
       if (rows.length === 0) return res.status(404).json({ error: "Store not found" });
-      const store = rows[0];
+      const store = normalizeStore(rows[0]);
 
-      const credentials = JSON.parse(store.service_account_json);
+      const credentials = JSON.parse(store.serviceAccountJson);
       const auth = new google.auth.GoogleAuth({ credentials, scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"] });
       const sheets = google.sheets({ version: "v4", auth });
-      const sheetRes = await sheets.spreadsheets.values.get({ spreadsheetId: store.spreadsheet_id, range: `${store.sheet_name || "Sheet1"}!1:2` });
+      const sheetRes = await sheets.spreadsheets.values.get({ spreadsheetId: store.spreadsheetId, range: `${store.sheet_name || "Sheet1"}!1:2` });
       const sheetRows = sheetRes.data.values;
       if (!sheetRows || sheetRows.length === 0) return res.json({ headers: [], preview: {} });
 
@@ -903,11 +898,11 @@ async function startServer() {
     try {
       const { rows: storeRows } = await pool.query("SELECT * FROM master_stores WHERE id = $1", [id]);
       if (storeRows.length === 0) return res.status(404).json({ error: "Store not found" });
-      const store = storeRows[0];
-      const credentials = JSON.parse(store.service_account_json);
+      const store = normalizeStore(storeRows[0]);
+      const credentials = JSON.parse(store.serviceAccountJson);
       const auth = new google.auth.GoogleAuth({ credentials, scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"] });
       const sheets = google.sheets({ version: "v4", auth });
-      const sheetRes = await sheets.spreadsheets.values.get({ spreadsheetId: store.spreadsheet_id, range: store.sheet_name || "Sheet1" });
+      const sheetRes = await sheets.spreadsheets.values.get({ spreadsheetId: store.spreadsheetId, range: store.sheet_name || "Sheet1" });
       const sheetRows = sheetRes.data.values;
       if (!sheetRows || sheetRows.length < 2) return res.json({ total: 0, passing: 0 });
       const headers = (sheetRows[0] || []).map((h: any) => String(h || "").trim());
@@ -930,14 +925,14 @@ async function startServer() {
     try {
       let shopDomains: string[] = [];
       if (req.user.role === 'admin') {
-        const { rows } = await pool.query("SELECT shop_domain FROM master_stores");
-        shopDomains = rows.map((r: any) => r.shop_domain);
+        const { rows } = await pool.query("SELECT * FROM master_stores");
+        shopDomains = rows.map((r: any) => r.shop_domain || r.shopDomain);
       } else {
         const { rows } = await pool.query(
-          "SELECT ms.shop_domain FROM master_stores ms JOIN store_assignments sa ON sa.master_store_id = ms.id WHERE sa.client_id = $1",
+          "SELECT ms.* FROM master_stores ms JOIN store_assignments sa ON sa.master_store_id = ms.id WHERE sa.client_id = $1",
           [req.user.id]
         );
-        shopDomains = rows.map((r: any) => r.shop_domain);
+        shopDomains = rows.map((r: any) => r.shop_domain || r.shopDomain);
       }
       if (shopDomains.length === 0) return res.json([]);
       const placeholders = shopDomains.map((_: any, i: number) => `$${i + 1}`).join(',');

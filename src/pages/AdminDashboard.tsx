@@ -97,10 +97,10 @@ export default function AdminDashboard() {
     try { mfm = JSON.parse(store.metafield_mappings || '[]'); } catch {}
     setNewMasterStore({
       name: store.name || '',
-      shopDomain: store.shop_domain,
-      accessToken: store.access_token,
-      spreadsheetId: store.spreadsheet_id,
-      serviceAccountJson: store.service_account_json,
+      shopDomain: store.shopDomain || store.shop_domain,
+      accessToken: store.accessToken || store.access_token,
+      spreadsheetId: store.spreadsheetId || store.spreadsheet_id,
+      serviceAccountJson: store.serviceAccountJson || store.service_account_json,
       sheetName: store.sheet_name || 'Sheet1',
       skuCol: store.sku_col || 'SKU',
       priceCol: store.price_col || 'Price',
@@ -289,11 +289,11 @@ export default function AdminDashboard() {
               </div>
               <div>
                 <h3 className="text-lg font-black text-black truncate">{store.name || 'Unlabeled Store'}</h3>
-                <p className="text-[10px] text-[#FFA500] font-black uppercase tracking-[0.15em] mt-1">{store.shop_domain}</p>
-                {store.spreadsheet_id && (
+                <p className="text-[10px] text-[#FFA500] font-black uppercase tracking-[0.15em] mt-1">{store.shopDomain || store.shop_domain}</p>
+                {(store.spreadsheetId || store.spreadsheet_id) && (
                   <div className="flex items-center space-x-1.5 mt-3">
                     <Database className="w-3 h-3 text-gray-300" />
-                    <p className="text-[10px] text-gray-400 font-mono truncate">{String(store.spreadsheet_id).slice(0, 22)}…</p>
+                    <p className="text-[10px] text-gray-400 font-mono truncate">{String(store.spreadsheetId || store.spreadsheet_id).slice(0, 22)}…</p>
                   </div>
                 )}
               </div>
