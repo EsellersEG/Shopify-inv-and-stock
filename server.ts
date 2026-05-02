@@ -741,8 +741,8 @@ async function startServer() {
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(fetchedCount, skusArray.length), total: skusArray.length, message: `Step 1: Fetching products (${Math.round(fetchedCount / skusArray.length * 100)}%)...` });
         }, 4);
 
-        // Product creation only in "Sync All" mode with title mapping
-        const canCreateProducts = syncMode === "all" && titleColIdx !== -1;
+        // Product creation in full sync modes (all / all-no-images) with title mapping
+        const canCreateProducts = isFullSync && titleColIdx !== -1;
         
         if (canCreateProducts) {
           console.log(`[SYNC] Product creation enabled - syncMode=all and title column found at index ${titleColIdx}`);
@@ -836,6 +836,17 @@ async function startServer() {
                 const option3Name = option3NameColIdx !== -1 ? String(rows[i][option3NameColIdx] ?? "").trim() : "";
                 const option3Value = option3ValueColIdx !== -1 ? String(rows[i][option3ValueColIdx] ?? "").trim() : "";
                 
+                // Collect metafields for creation
+                const createMetafields: Array<{ namespace: string; key: string; type: string; value: string }> = [];
+                if (metafieldColIndexes.length > 0) {
+                  for (const mf of metafieldColIndexes) {
+                    const val = String(rows[i][mf.colIdx] ?? "").trim();
+                    if (val) {
+                      createMetafields.push({ namespace: mf.namespace, key: mf.key, type: mf.type, value: val });
+                    }
+                  }
+                }
+                
                 updates.push({
                   type: "create",
                   sku,
@@ -862,6 +873,7 @@ async function startServer() {
                   option2Value,
                   option3Name,
                   option3Value,
+                  metafields: createMetafields,
                   rowNumber: i
                 });
                 console.log(`[SYNC] Create Pending: SKU ${sku} -> "${title}" (barcode: ${barcode || "none"}, vendor: ${vendor || "none"})`);
@@ -1062,10 +1074,12 @@ async function startServer() {
 
         // ── Step 2a: Create new products (if any) ──
         const createBatch = updates.filter((u: any) => u.type === "create");
+        const nonCreateUpdates = updates.filter((u: any) => u.type !== "create");
+        const totalExistingToUpdate = Object.keys(productUpdates).length + Object.keys(variantUpdates).length + Object.keys(inventoryItemUpdates).length;
         let createdCount = 0;
         if (createBatch.length > 0) {
-          console.log(`[SYNC] Creating ${createBatch.length} new products...`);
-          await updateSyncSession(shopDomain, { type: "progress", current: 0, total: createBatch.length, message: `Step 2a: Creating ${createBatch.length} new products...` });
+          console.log(`[SYNC] Creating ${createBatch.length} new products (${totalExistingToUpdate} existing queued for update)...`);
+          await updateSyncSession(shopDomain, { type: "progress", current: 0, total: createBatch.length, message: `Step 2/6: Creating ${createBatch.length} NEW products (${totalExistingToUpdate} existing queued for update)...` });
           
           // Process creates SEQUENTIALLY - each product needs 5-6 API calls, too many in parallel causes throttling
           for (let idx = 0; idx < createBatch.length; idx++) {
@@ -1242,18 +1256,43 @@ async function startServer() {
                 await shopifyGraphQL(shopDomain, accessToken, imgMutation);
               }
               
+              // Step 6: Set metafields if any mapped
+              if (item.metafields && item.metafields.length > 0) {
+                const metafieldsInput = item.metafields.map((mf: any) => ({
+                  ownerId: newProduct.id,
+                  namespace: mf.namespace,
+                  key: mf.key,
+                  type: mf.type,
+                  value: mf.value
+                }));
+                
+                const mfMutation = `mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+                  metafieldsSet(metafields: $metafields) {
+                    metafields { id namespace key value }
+                    userErrors { field message }
+                  }
+                }`;
+                const mfResult = await shopifyGraphQL(shopDomain, accessToken, mfMutation, { metafields: metafieldsInput });
+                const mfErrs = mfResult.data?.metafieldsSet?.userErrors;
+                if (mfErrs?.length > 0) {
+                  console.error(`[SYNC] Metafield error for new product ${item.sku}:`, mfErrs);
+                  logs.push(`Metafield Error (${item.sku}): ${mfErrs[0].message}`);
+                } else {
+                  console.log(`[SYNC] Metafields set for new product ${item.sku}: ${item.metafields.length} fields`);
+                }
+              }
+              
               // Add delay between full product creations to avoid throttling
               await new Promise(r => setTimeout(r, 500));
             }
             
-            await updateSyncSession(shopDomain, { type: "progress", current: idx + 1, total: createBatch.length, message: `Step 2a: Creating products (${idx + 1}/${createBatch.length})...` });
+            await updateSyncSession(shopDomain, { type: "progress", current: idx + 1, total: createBatch.length, message: `Step 2/6: Creating NEW products (${idx + 1}/${createBatch.length})...` });
           }
           
           console.log(`[SYNC] Created ${createdCount} products`);
         }
 
-        // Filter out create operations for remaining processing
-        const nonCreateUpdates = updates.filter((u: any) => u.type !== "create");
+        // nonCreateUpdates already computed above
 
         if (nonCreateUpdates.length === 0 && Object.keys(productUpdates).length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: createdCount, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
 
@@ -1328,7 +1367,7 @@ async function startServer() {
             }
           }
 
-          await updateSyncSession(shopDomain, { type: "progress", current: Math.min(i + 50, updates.length), total: updates.length, message: `Step 2: Syncing updates to Shopify...` });
+          await updateSyncSession(shopDomain, { type: "progress", current: Math.min(i + 50, nonCreateUpdates.length), total: nonCreateUpdates.length, message: `Step 3/6: Syncing prices & stock (${Math.min(i + 50, nonCreateUpdates.length)}/${nonCreateUpdates.length})...` });
         }
 
         // ── Step 3: Product-level updates (ALL fields: title, description, vendor, etc.) ──
@@ -1413,7 +1452,7 @@ async function startServer() {
             if (imgErrs?.length > 0) { logs.push(`Image Error: ${imgErrs[0].message}`); } else productUpdateCount++;
           }
 
-          await updateSyncSession(shopDomain, { type: "progress", current: Math.min(pi + 10, productUpdateEntries.length), total: productUpdateEntries.length, message: "Step 3: Updating product fields..." });
+          await updateSyncSession(shopDomain, { type: "progress", current: Math.min(pi + 10, productUpdateEntries.length), total: productUpdateEntries.length, message: `Step 4/6: Updating product fields & metafields (${Math.min(pi + 10, productUpdateEntries.length)}/${productUpdateEntries.length})...` });
         }
         
         // ── Step 4: Variant-level updates (barcode, taxable, options) ──
@@ -1461,7 +1500,7 @@ async function startServer() {
               }
             });
             
-            await updateSyncSession(shopDomain, { type: "progress", current: Math.min(vi + 5, productIds.length), total: productIds.length, message: "Step 4: Updating variant fields..." });
+            await updateSyncSession(shopDomain, { type: "progress", current: Math.min(vi + 5, productIds.length), total: productIds.length, message: `Step 5/6: Updating variant fields (${Math.min(vi + 5, productIds.length)}/${productIds.length})...` });
           }
         }
         
@@ -1506,7 +1545,7 @@ async function startServer() {
               }
             }
             
-            await updateSyncSession(shopDomain, { type: "progress", current: Math.min(ii + 10, invItemUpdateEntries.length), total: invItemUpdateEntries.length, message: "Step 5: Updating inventory items..." });
+            await updateSyncSession(shopDomain, { type: "progress", current: Math.min(ii + 10, invItemUpdateEntries.length), total: invItemUpdateEntries.length, message: `Step 6/6: Updating inventory items (${Math.min(ii + 10, invItemUpdateEntries.length)}/${invItemUpdateEntries.length})...` });
           }
         }
 
