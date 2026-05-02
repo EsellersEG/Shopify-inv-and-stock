@@ -90,6 +90,7 @@ export default function FieldMapping({
   const [metafields, setMetafields] = useState<MetafieldMapping[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">("idle");
   const [showRecommended, setShowRecommended] = useState(true);
   const [showOptional, setShowOptional] = useState(false);
   const [showMetafields, setShowMetafields] = useState(false);
@@ -201,6 +202,7 @@ export default function FieldMapping({
 
   async function handleSave() {
     setSaving(true);
+    setSaveStatus("idle");
     try {
       const token = localStorage.getItem("token");
       
@@ -213,19 +215,20 @@ export default function FieldMapping({
       
       if (!store) {
         console.error("Store not found for saving");
+        setSaveStatus("error");
         return;
       }
 
-      await fetch(`/api/admin/master-stores/${storeId}`, {
+      const res = await fetch(`/api/admin/master-stores/${storeId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           name: store.name,
-          shopDomain: store.shop_domain,
-          accessToken: store.access_token,
-          spreadsheetId: store.spreadsheet_id,
-          serviceAccountJson: store.service_account_json,
-          sheetName: store.sheet_name,
+          shopDomain: store.shopDomain || store.shop_domain,
+          accessToken: store.accessToken || store.access_token,
+          spreadsheetId: store.spreadsheetId || store.spreadsheet_id,
+          serviceAccountJson: "", // keep existing (server preserves when blank)
+          sheetName: store.sheet_name || store.sheetName,
           fieldMappings: mappings,
           metafieldMappings: metafields,
           // Keep legacy columns in sync
@@ -235,9 +238,18 @@ export default function FieldMapping({
           inventoryCol: mappings.variant_inventory_qty || store.inventory_col || inventoryCol,
         }),
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        console.error("Save failed:", errData);
+        setSaveStatus("error");
+        return;
+      }
+      setSaveStatus("success");
+      setTimeout(() => setSaveStatus("idle"), 3000);
       onMappingSave?.(mappings, metafields);
     } catch (e) {
       console.error("Failed to save mappings:", e);
+      setSaveStatus("error");
     } finally {
       setSaving(false);
     }
@@ -311,7 +323,7 @@ export default function FieldMapping({
             className="flex items-center gap-2 bg-[#FFA500] hover:bg-orange-600 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow-lg shadow-orange-500/20 disabled:opacity-50"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            <span>{saving ? "Saving..." : "Save Mappings"}</span>
+            <span>{saving ? "Saving..." : saveStatus === "success" ? "Saved!" : saveStatus === "error" ? "Save Failed!" : "Save Mappings"}</span>
           </button>
         </div>
       </div>
