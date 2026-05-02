@@ -1319,6 +1319,7 @@ async function startServer() {
                 const metafieldsInput = item.metafields.map((mf: any) => {
                   const defKey = `${mf.namespace}.${mf.key}`;
                   const resolvedType = metafieldDefMap.get(defKey) || mf.type;
+                  console.log(`[SYNC] Metafield ${mf.namespace}.${mf.key}: configured=${mf.type}, resolved=${resolvedType}, value="${mf.value}"`);
                   return {
                     ownerId: newProduct.id,
                     namespace: mf.namespace,
@@ -1337,8 +1338,18 @@ async function startServer() {
                 const mfResult = await shopifyGraphQL(shopDomain, accessToken, mfMutation, { metafields: metafieldsInput });
                 const mfErrs = mfResult.data?.metafieldsSet?.userErrors;
                 if (mfErrs?.length > 0) {
-                  console.error(`[SYNC] Metafield error for new product ${item.sku}:`, mfErrs);
-                  logs.push(`Metafield Error (${item.sku}): ${mfErrs[0].message}`);
+                  console.error(`[SYNC] Batch metafield error for ${item.sku}, retrying individually:`, mfErrs[0].message);
+                  // Atomic failure — retry each metafield individually
+                  let mfOk = 0;
+                  for (const singleMf of metafieldsInput) {
+                    const singleResult = await shopifyGraphQL(shopDomain, accessToken, mfMutation, { metafields: [singleMf] });
+                    const singleErrs = singleResult.data?.metafieldsSet?.userErrors;
+                    if (singleErrs?.length > 0) {
+                      console.error(`[SYNC] Metafield ${singleMf.namespace}.${singleMf.key} FAILED: ${singleErrs[0].message}`);
+                      logs.push(`Metafield Error (${item.sku}) ${singleMf.namespace}.${singleMf.key}: ${singleErrs[0].message}`);
+                    } else { mfOk++; }
+                  }
+                  console.log(`[SYNC] Metafields for ${item.sku}: ${mfOk}/${metafieldsInput.length} set individually`);
                 } else {
                   console.log(`[SYNC] Metafields set for new product ${item.sku}: ${item.metafields.length} fields`);
                 }
@@ -1498,11 +1509,22 @@ async function startServer() {
               }
             }`;
             
+            console.log(`[SYNC] Sending ${metafieldsInput.length} metafields for product ${productId}:`, metafieldsInput.map((m: any) => `${m.namespace}.${m.key}=${m.value} (${m.type})`).join(', '));
             const mfResult = await shopifyGraphQL(shopDomain, accessToken, mfMutation, { metafields: metafieldsInput });
             const mfErrs = mfResult.data?.metafieldsSet?.userErrors;
             if (mfErrs?.length > 0) {
-              logs.push(`Metafield Error (${productId}): ${mfErrs[0].message}`);
-              console.error(`[SYNC] Metafield error:`, mfErrs);
+              console.error(`[SYNC] Batch metafield error for ${productId}, retrying individually:`, mfErrs[0].message);
+              // Atomic failure — retry each metafield individually
+              let mfOk = 0;
+              for (const singleMf of metafieldsInput) {
+                const singleResult = await shopifyGraphQL(shopDomain, accessToken, mfMutation, { metafields: [singleMf] });
+                const singleErrs = singleResult.data?.metafieldsSet?.userErrors;
+                if (singleErrs?.length > 0) {
+                  console.error(`[SYNC] Metafield ${singleMf.namespace}.${singleMf.key} FAILED: ${singleErrs[0].message}`);
+                  logs.push(`Metafield Error (${productId}) ${singleMf.namespace}.${singleMf.key}: ${singleErrs[0].message}`);
+                } else { mfOk++; }
+              }
+              console.log(`[SYNC] Metafields for ${productId}: ${mfOk}/${metafieldsInput.length} set individually`);
             } else {
               console.log(`[SYNC] Metafields set for product ${productId}: ${upd.metafields.length} fields`);
             }
