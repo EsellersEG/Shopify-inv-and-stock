@@ -154,6 +154,10 @@ async function initDatabase() {
       )
     `);
   } catch (e) { console.error("sync_results create failed:", e); }
+
+  // Add missing columns to filter_rules
+  try { await pool.query("ALTER TABLE filter_rules ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"); } catch {}
+  try { await pool.query("ALTER TABLE filter_rules ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()"); } catch {}
 }
 
 function evaluateRule(operator: string, fieldValue: string, ruleValue: string): boolean {
@@ -698,11 +702,44 @@ async function startServer() {
         console.log(`[SYNC] Field indexes - Inventory: weight=${weightColIdx}, weightUnit=${weightUnitColIdx}, reqShip=${requiresShippingColIdx}`);
         console.log(`[SYNC] Field indexes - Images: image=${imageSrcColIdx}, variantImg=${variantImageColIdx}`);
 
+        // Always fetch locationId (needed for stock sync AND product creation inventory)
         let locationId = null;
-        if (shouldSyncStock) {
+        try {
           const locRes = await fetch(`https://${shopDomain}/admin/api/2025-01/locations.json`, { headers: { "X-Shopify-Access-Token": accessToken } });
           const locData = await locRes.json();
           locationId = locData.locations?.[0]?.id;
+          console.log(`[SYNC] Location ID: ${locationId}`);
+        } catch (e) { console.error("[SYNC] Failed to fetch location:", e); }
+
+        // Fetch Online Store publication ID for publishing created products
+        let onlineStorePublicationId: string | null = null;
+        try {
+          const pubQuery = `{ publications(first: 20) { edges { node { id name } } } }`;
+          const pubData = await shopifyGraphQL(shopDomain, accessToken, pubQuery, {});
+          const publications = pubData.data?.publications?.edges || [];
+          const onlineStore = publications.find((e: any) => 
+            e.node.name === "Online Store" || e.node.name === "online_store"
+          );
+          if (onlineStore) {
+            onlineStorePublicationId = onlineStore.node.id;
+            console.log(`[SYNC] Online Store Publication ID: ${onlineStorePublicationId}`);
+          } else if (publications.length > 0) {
+            onlineStorePublicationId = publications[0].node.id;
+            console.log(`[SYNC] Using first publication as fallback: ${onlineStorePublicationId} (${publications[0].node.name})`);
+          }
+        } catch (e) { console.error("[SYNC] Failed to fetch publications:", e); }
+
+        // Fetch existing metafield definitions to resolve correct types
+        const metafieldDefMap = new Map<string, string>();
+        if (shouldSyncMetafields) {
+          try {
+            const defQuery = `{ metafieldDefinitions(first: 100, ownerType: PRODUCT) { edges { node { namespace key type { name } } } } }`;
+            const defData = await shopifyGraphQL(shopDomain, accessToken, defQuery, {});
+            (defData.data?.metafieldDefinitions?.edges || []).forEach((e: any) => {
+              metafieldDefMap.set(`${e.node.namespace}.${e.node.key}`, e.node.type.name);
+            });
+            console.log(`[SYNC] Loaded ${metafieldDefMap.size} metafield definitions from Shopify`);
+          } catch (e) { console.error("[SYNC] Failed to fetch metafield definitions:", e); }
         }
 
         const skusArray = Array.from(new Set(rows.slice(1).map((r: any) => r[skuIndex]).filter(Boolean)));
@@ -1141,7 +1178,7 @@ async function startServer() {
               console.error(`[SYNC] ${msg}`);
               logs.push(msg);
               syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: result.errors[0]?.message || "Unknown error", rowNumber: item.rowNumber });
-              return;
+              continue;
             }
             
             const userErrors = result.data?.productCreate?.userErrors;
@@ -1150,7 +1187,7 @@ async function startServer() {
               console.error(`[SYNC] ${msg}`);
               logs.push(msg);
               syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: userErrors[0].message, rowNumber: item.rowNumber });
-              return;
+              continue;
             }
             
             const newProduct = result.data?.productCreate?.product;
@@ -1189,9 +1226,9 @@ async function startServer() {
                 }
               }
               
-              // Step 2b: Update inventory item with SKU, weight, requiresShipping
+              // Step 2b: Update inventory item with SKU, weight, requiresShipping, tracked=true
               if (invItemId) {
-                const invItemInput: any = {};
+                const invItemInput: any = { tracked: true };
                 if (item.sku) invItemInput.sku = item.sku;
                 if (item.weight !== null && item.weight !== undefined) {
                   invItemInput.measurement = {
@@ -1256,15 +1293,40 @@ async function startServer() {
                 await shopifyGraphQL(shopDomain, accessToken, imgMutation);
               }
               
-              // Step 6: Set metafields if any mapped
+              // Step 6: Publish product to Online Store sales channel
+              if (onlineStorePublicationId && item.status === "ACTIVE") {
+                const publishMutation = `mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) {
+                  publishablePublish(id: $id, input: $input) {
+                    publishable { ... on Product { id } }
+                    userErrors { field message }
+                  }
+                }`;
+                const publishResult = await shopifyGraphQL(shopDomain, accessToken, publishMutation, {
+                  id: newProduct.id,
+                  input: [{ publicationId: onlineStorePublicationId }]
+                });
+                const pubErrs = publishResult.data?.publishablePublish?.userErrors;
+                if (pubErrs?.length > 0) {
+                  console.error(`[SYNC] Publish error for ${item.sku}:`, pubErrs[0].message);
+                  logs.push(`Publish Error (${item.sku}): ${pubErrs[0].message}`);
+                } else {
+                  console.log(`[SYNC] Published to Online Store: ${item.sku}`);
+                }
+              }
+              
+              // Step 7: Set metafields if any mapped
               if (item.metafields && item.metafields.length > 0) {
-                const metafieldsInput = item.metafields.map((mf: any) => ({
-                  ownerId: newProduct.id,
-                  namespace: mf.namespace,
-                  key: mf.key,
-                  type: mf.type,
-                  value: mf.value
-                }));
+                const metafieldsInput = item.metafields.map((mf: any) => {
+                  const defKey = `${mf.namespace}.${mf.key}`;
+                  const resolvedType = metafieldDefMap.get(defKey) || mf.type;
+                  return {
+                    ownerId: newProduct.id,
+                    namespace: mf.namespace,
+                    key: mf.key,
+                    type: resolvedType,
+                    value: mf.value
+                  };
+                });
                 
                 const mfMutation = `mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
                   metafieldsSet(metafields: $metafields) {
@@ -1417,13 +1479,17 @@ async function startServer() {
           for (const [productId, upd] of chunk) {
             if (!upd.metafields || upd.metafields.length === 0) continue;
             
-            const metafieldsInput = upd.metafields.map(mf => ({
-              ownerId: productId,
-              namespace: mf.namespace,
-              key: mf.key,
-              type: mf.type,
-              value: mf.value
-            }));
+            const metafieldsInput = upd.metafields.map(mf => {
+              const defKey = `${mf.namespace}.${mf.key}`;
+              const resolvedType = metafieldDefMap.get(defKey) || mf.type;
+              return {
+                ownerId: productId,
+                namespace: mf.namespace,
+                key: mf.key,
+                type: resolvedType,
+                value: mf.value
+              };
+            });
             
             const mfMutation = `mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
               metafieldsSet(metafields: $metafields) {
