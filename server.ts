@@ -615,8 +615,9 @@ async function startServer() {
         const syncResultsArr: Array<{sku: string; status: string; action: string; message: string; rowNumber: number}> = [];
         let filterRules: any[] = [];
         let fieldMappings: Record<string, string> = {};
+        let metafieldMappings: Array<{ namespace: string; key: string; type: string; sheetColumn: string }> = [];
         try {
-          const { rows: storeRows } = await pool.query("SELECT id, field_mappings FROM master_stores WHERE shop_domain = $1", [shopDomain]);
+          const { rows: storeRows } = await pool.query("SELECT id, field_mappings, metafield_mappings FROM master_stores WHERE shop_domain = $1", [shopDomain]);
           const storeRow = storeRows[0];
           const storeId = storeRow?.id;
           if (storeId) {
@@ -627,19 +628,75 @@ async function startServer() {
           if (storeRow?.field_mappings) {
             try { fieldMappings = JSON.parse(storeRow.field_mappings); } catch {}
           }
+          if (storeRow?.metafield_mappings) {
+            try { metafieldMappings = JSON.parse(storeRow.metafield_mappings) || []; } catch {}
+          }
+          if (metafieldMappings.length > 0) console.log(`[SYNC] Loaded ${metafieldMappings.length} metafield mappings`);
         } catch (e) { console.error("[SYNC] Failed to load store config:", e); }
 
-        const shouldSyncPrice  = syncMode === "price" || syncMode === "both" || syncMode === "all" || syncMode === "all-no-images" || (syncFields as string[]).includes("price");
-        const shouldSyncStock  = syncMode === "stock" || syncMode === "both" || syncMode === "all" || syncMode === "all-no-images" || (syncFields as string[]).includes("stock");
-        const shouldSyncTags   = syncMode === "all" || syncMode === "all-no-images" || (syncFields as string[]).includes("tags");
-        const shouldSyncStatus = syncMode === "all" || syncMode === "all-no-images" || (syncFields as string[]).includes("status");
+        // Determine what fields to sync based on mode
+        const isFullSync = syncMode === "all" || syncMode === "all-no-images";
+        const shouldSyncPrice  = syncMode === "price" || syncMode === "both" || isFullSync || (syncFields as string[]).includes("price");
+        const shouldSyncStock  = syncMode === "stock" || syncMode === "both" || isFullSync || (syncFields as string[]).includes("stock");
+        const shouldSyncTags   = isFullSync || (syncFields as string[]).includes("tags");
+        const shouldSyncStatus = isFullSync || (syncFields as string[]).includes("status");
         const shouldSyncImages = syncMode === "all" || (syncFields as string[]).includes("images");
+        const shouldSyncProductFields = isFullSync; // Title, Description, Vendor, Product Type, Handle
+        const shouldSyncVariantFields = isFullSync; // Barcode, Taxable, Options
+        const shouldSyncInventoryFields = isFullSync; // Weight, Requires Shipping
+        const shouldSyncMetafields = isFullSync && metafieldMappings.length > 0;
 
-        // Product-level field column indexes (from stored field_mappings)
-        const tagsColIdx     = (shouldSyncTags   && fieldMappings.tags)                                               ? headers.indexOf(fieldMappings.tags)                                        : -1;
-        const statusColIdx   = (shouldSyncStatus && (fieldMappings.status || fieldMappings.published))                 ? headers.indexOf((fieldMappings.status || fieldMappings.published) as string): -1;
-        const imageSrcColIdx = (shouldSyncImages && fieldMappings.image_src)                                           ? headers.indexOf(fieldMappings.image_src)                                    : -1;
-        if (shouldSyncTags || shouldSyncStatus || shouldSyncImages) console.log(`[SYNC] Product field indexes: tags=${tagsColIdx}, status=${statusColIdx}, imageSrc=${imageSrcColIdx}`);
+        // ── ALL field column indexes (from stored field_mappings) ──
+        // Product-level fields
+        const titleColIdx = shouldSyncProductFields && fieldMappings.title ? headers.indexOf(fieldMappings.title) : -1;
+        const descColIdx = shouldSyncProductFields && (fieldMappings.description || fieldMappings.body_html) ? headers.indexOf((fieldMappings.description || fieldMappings.body_html) as string) : -1;
+        const vendorColIdx = shouldSyncProductFields && fieldMappings.vendor ? headers.indexOf(fieldMappings.vendor) : -1;
+        const productTypeColIdx = shouldSyncProductFields && fieldMappings.product_type ? headers.indexOf(fieldMappings.product_type) : -1;
+        const handleColIdx = shouldSyncProductFields && fieldMappings.handle ? headers.indexOf(fieldMappings.handle) : -1;
+        const tagsColIdx = shouldSyncTags && fieldMappings.tags ? headers.indexOf(fieldMappings.tags) : -1;
+        const statusColIdx = shouldSyncStatus && (fieldMappings.status || fieldMappings.published) ? headers.indexOf((fieldMappings.status || fieldMappings.published) as string) : -1;
+        const giftCardColIdx = shouldSyncProductFields && fieldMappings.gift_card ? headers.indexOf(fieldMappings.gift_card) : -1;
+        
+        // Option names (product-level)
+        const option1NameColIdx = shouldSyncProductFields && fieldMappings.option1_name ? headers.indexOf(fieldMappings.option1_name) : -1;
+        const option2NameColIdx = shouldSyncProductFields && fieldMappings.option2_name ? headers.indexOf(fieldMappings.option2_name) : -1;
+        const option3NameColIdx = shouldSyncProductFields && fieldMappings.option3_name ? headers.indexOf(fieldMappings.option3_name) : -1;
+        
+        // Variant-level fields
+        const barcodeColIdx = shouldSyncVariantFields && fieldMappings.variant_barcode ? headers.indexOf(fieldMappings.variant_barcode) : -1;
+        const taxableColIdx = shouldSyncVariantFields && fieldMappings.variant_taxable ? headers.indexOf(fieldMappings.variant_taxable) : -1;
+        const invPolicyColIdx = shouldSyncVariantFields && fieldMappings.variant_inventory_policy ? headers.indexOf(fieldMappings.variant_inventory_policy) : -1;
+        const fulfillmentColIdx = shouldSyncVariantFields && fieldMappings.variant_fulfillment_service ? headers.indexOf(fieldMappings.variant_fulfillment_service) : -1;
+        const option1ValueColIdx = shouldSyncVariantFields && fieldMappings.option1_value ? headers.indexOf(fieldMappings.option1_value) : -1;
+        const option2ValueColIdx = shouldSyncVariantFields && fieldMappings.option2_value ? headers.indexOf(fieldMappings.option2_value) : -1;
+        const option3ValueColIdx = shouldSyncVariantFields && fieldMappings.option3_value ? headers.indexOf(fieldMappings.option3_value) : -1;
+        
+        // Inventory item fields
+        const weightColIdx = shouldSyncInventoryFields && fieldMappings.variant_grams ? headers.indexOf(fieldMappings.variant_grams) : -1;
+        const weightUnitColIdx = shouldSyncInventoryFields && fieldMappings.variant_weight_unit ? headers.indexOf(fieldMappings.variant_weight_unit) : -1;
+        const requiresShippingColIdx = shouldSyncInventoryFields && fieldMappings.variant_requires_shipping ? headers.indexOf(fieldMappings.variant_requires_shipping) : -1;
+        
+        // Image fields
+        const imageSrcColIdx = shouldSyncImages && fieldMappings.image_src ? headers.indexOf(fieldMappings.image_src) : -1;
+        const variantImageColIdx = shouldSyncImages && fieldMappings.variant_image ? headers.indexOf(fieldMappings.variant_image) : -1;
+        const imageAltColIdx = shouldSyncImages && fieldMappings.image_alt_text ? headers.indexOf(fieldMappings.image_alt_text) : -1;
+        
+        // Metafield column indexes
+        const metafieldColIndexes: Array<{ namespace: string; key: string; type: string; colIdx: number }> = [];
+        if (shouldSyncMetafields) {
+          metafieldMappings.forEach(mf => {
+            const colIdx = headers.indexOf(mf.sheetColumn);
+            if (colIdx !== -1) {
+              metafieldColIndexes.push({ namespace: mf.namespace, key: mf.key, type: mf.type, colIdx });
+            }
+          });
+          if (metafieldColIndexes.length > 0) console.log(`[SYNC] Metafield columns mapped: ${metafieldColIndexes.length}`);
+        }
+        
+        console.log(`[SYNC] Field indexes - Product: title=${titleColIdx}, desc=${descColIdx}, vendor=${vendorColIdx}, type=${productTypeColIdx}, handle=${handleColIdx}, tags=${tagsColIdx}, status=${statusColIdx}`);
+        console.log(`[SYNC] Field indexes - Variant: barcode=${barcodeColIdx}, taxable=${taxableColIdx}, opt1Val=${option1ValueColIdx}`);
+        console.log(`[SYNC] Field indexes - Inventory: weight=${weightColIdx}, weightUnit=${weightUnitColIdx}, reqShip=${requiresShippingColIdx}`);
+        console.log(`[SYNC] Field indexes - Images: image=${imageSrcColIdx}, variantImg=${variantImageColIdx}`);
 
         let locationId = null;
         if (shouldSyncStock) {
@@ -684,35 +741,49 @@ async function startServer() {
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(fetchedCount, skusArray.length), total: skusArray.length, message: `Step 1: Fetching products (${Math.round(fetchedCount / skusArray.length * 100)}%)...` });
         }, 4);
 
-        // ── Extract ALL field mapping column indexes ──
-        const titleColIdx = fieldMappings.title ? headers.indexOf(fieldMappings.title) : -1;
-        const descColIdx = fieldMappings.description ? headers.indexOf(fieldMappings.description) : (fieldMappings.body_html ? headers.indexOf(fieldMappings.body_html) : -1);
-        const vendorColIdx = fieldMappings.vendor ? headers.indexOf(fieldMappings.vendor) : -1;
-        const productTypeColIdx = fieldMappings.product_type ? headers.indexOf(fieldMappings.product_type) : -1;
-        const handleColIdx = fieldMappings.handle ? headers.indexOf(fieldMappings.handle) : -1;
-        const barcodeColIdx = fieldMappings.variant_barcode ? headers.indexOf(fieldMappings.variant_barcode) : -1;
-        const weightColIdx = fieldMappings.variant_grams ? headers.indexOf(fieldMappings.variant_grams) : -1;
-        const weightUnitColIdx = fieldMappings.variant_weight_unit ? headers.indexOf(fieldMappings.variant_weight_unit) : -1;
-        const taxableColIdx = fieldMappings.variant_taxable ? headers.indexOf(fieldMappings.variant_taxable) : -1;
-        const requiresShippingColIdx = fieldMappings.variant_requires_shipping ? headers.indexOf(fieldMappings.variant_requires_shipping) : -1;
-        const option1NameColIdx = fieldMappings.option1_name ? headers.indexOf(fieldMappings.option1_name) : -1;
-        const option1ValueColIdx = fieldMappings.option1_value ? headers.indexOf(fieldMappings.option1_value) : -1;
-        const option2NameColIdx = fieldMappings.option2_name ? headers.indexOf(fieldMappings.option2_name) : -1;
-        const option2ValueColIdx = fieldMappings.option2_value ? headers.indexOf(fieldMappings.option2_value) : -1;
-        const option3NameColIdx = fieldMappings.option3_name ? headers.indexOf(fieldMappings.option3_name) : -1;
-        const option3ValueColIdx = fieldMappings.option3_value ? headers.indexOf(fieldMappings.option3_value) : -1;
-        const variantImageColIdx = fieldMappings.variant_image ? headers.indexOf(fieldMappings.variant_image) : -1;
-        
         // Product creation only in "Sync All" mode with title mapping
         const canCreateProducts = syncMode === "all" && titleColIdx !== -1;
         
         if (canCreateProducts) {
           console.log(`[SYNC] Product creation enabled - syncMode=all and title column found at index ${titleColIdx}`);
-          console.log(`[SYNC] Field mappings: title=${titleColIdx}, desc=${descColIdx}, vendor=${vendorColIdx}, type=${productTypeColIdx}, handle=${handleColIdx}, barcode=${barcodeColIdx}, weight=${weightColIdx}, tags=${tagsColIdx}, status=${statusColIdx}, image=${imageSrcColIdx}`);
         }
 
         const updates: any[] = [];
-        const productUpdates: Record<string, { tags?: string[]; status?: string; imageSrc?: string }> = {};
+        // Expanded structure for ALL product-level updates
+        const productUpdates: Record<string, {
+          // Product fields
+          title?: string;
+          description?: string;
+          vendor?: string;
+          productType?: string;
+          handle?: string;
+          tags?: string[];
+          status?: string;
+          giftCard?: boolean;
+          // Image
+          imageSrc?: string;
+          // Metafields
+          metafields?: Array<{ namespace: string; key: string; type: string; value: string }>;
+        }> = {};
+        // Variant-level updates
+        const variantUpdates: Record<string, {
+          variantId: string;
+          productId: string;
+          barcode?: string;
+          taxable?: boolean;
+          inventoryPolicy?: string;
+          fulfillmentService?: string;
+          option1?: string;
+          option2?: string;
+          option3?: string;
+        }> = {};
+        // Inventory item updates
+        const inventoryItemUpdates: Record<string, {
+          invItemId: string;
+          weight?: number;
+          weightUnit?: string;
+          requiresShipping?: boolean;
+        }> = {};
         
         for (let i = 1; i < rows.length; i++) {
           const sku = String(rows[i][skuIndex] || "").trim();
@@ -803,27 +874,133 @@ async function startServer() {
             continue;
           }
 
-          // Collect product-level updates
+          // ── Collect ALL updates for EXISTING products ──
+          
+          // Product-level fields
           if (shopify.productId) {
+            productUpdates[shopify.productId] = productUpdates[shopify.productId] || {};
+            
+            // Title
+            if (titleColIdx !== -1) {
+              const val = String(rows[i][titleColIdx] ?? "").trim();
+              if (val) productUpdates[shopify.productId].title = val;
+            }
+            // Description
+            if (descColIdx !== -1) {
+              const val = String(rows[i][descColIdx] ?? "").trim();
+              if (val) productUpdates[shopify.productId].description = val;
+            }
+            // Vendor
+            if (vendorColIdx !== -1) {
+              const val = String(rows[i][vendorColIdx] ?? "").trim();
+              if (val) productUpdates[shopify.productId].vendor = val;
+            }
+            // Product Type
+            if (productTypeColIdx !== -1) {
+              const val = String(rows[i][productTypeColIdx] ?? "").trim();
+              if (val) productUpdates[shopify.productId].productType = val;
+            }
+            // Handle
+            if (handleColIdx !== -1) {
+              const val = String(rows[i][handleColIdx] ?? "").trim();
+              if (val) productUpdates[shopify.productId].handle = val;
+            }
+            // Tags
             if (tagsColIdx !== -1) {
               const raw = String(rows[i][tagsColIdx] ?? "").trim();
-              if (raw) {
-                productUpdates[shopify.productId] = productUpdates[shopify.productId] || {};
-                productUpdates[shopify.productId].tags = raw.split(",").map((t: string) => t.trim()).filter(Boolean);
-              }
+              if (raw) productUpdates[shopify.productId].tags = raw.split(",").map((t: string) => t.trim()).filter(Boolean);
             }
+            // Status
             if (statusColIdx !== -1) {
               const rawStatus = String(rows[i][statusColIdx] ?? "").trim().toUpperCase();
               if (rawStatus && ["ACTIVE", "DRAFT", "ARCHIVED"].includes(rawStatus)) {
-                productUpdates[shopify.productId] = productUpdates[shopify.productId] || {};
                 productUpdates[shopify.productId].status = rawStatus;
               }
             }
+            // Gift Card
+            if (giftCardColIdx !== -1) {
+              const val = String(rows[i][giftCardColIdx] ?? "").trim().toLowerCase();
+              if (val) productUpdates[shopify.productId].giftCard = val === "true" || val === "yes" || val === "1";
+            }
+            // Image (only if shouldSyncImages)
             if (imageSrcColIdx !== -1) {
               const raw = String(rows[i][imageSrcColIdx] ?? "").trim();
-              if (raw) {
-                productUpdates[shopify.productId] = productUpdates[shopify.productId] || {};
-                productUpdates[shopify.productId].imageSrc = raw;
+              if (raw) productUpdates[shopify.productId].imageSrc = raw;
+            }
+            
+            // Metafields
+            if (metafieldColIndexes.length > 0) {
+              const mfValues: Array<{ namespace: string; key: string; type: string; value: string }> = [];
+              for (const mf of metafieldColIndexes) {
+                const val = String(rows[i][mf.colIdx] ?? "").trim();
+                if (val) {
+                  mfValues.push({ namespace: mf.namespace, key: mf.key, type: mf.type, value: val });
+                }
+              }
+              if (mfValues.length > 0) {
+                productUpdates[shopify.productId].metafields = mfValues;
+              }
+            }
+          }
+          
+          // Variant-level fields
+          if (shopify.variantId) {
+            const hasVariantUpdates = barcodeColIdx !== -1 || taxableColIdx !== -1 || 
+                                       invPolicyColIdx !== -1 || fulfillmentColIdx !== -1 ||
+                                       option1ValueColIdx !== -1 || option2ValueColIdx !== -1 || option3ValueColIdx !== -1;
+            if (hasVariantUpdates) {
+              variantUpdates[sku] = { variantId: shopify.variantId, productId: shopify.productId };
+              
+              if (barcodeColIdx !== -1) {
+                const val = String(rows[i][barcodeColIdx] ?? "").trim();
+                if (val) variantUpdates[sku].barcode = val;
+              }
+              if (taxableColIdx !== -1) {
+                const val = String(rows[i][taxableColIdx] ?? "").trim().toLowerCase();
+                variantUpdates[sku].taxable = val === "true" || val === "yes" || val === "1";
+              }
+              if (invPolicyColIdx !== -1) {
+                const val = String(rows[i][invPolicyColIdx] ?? "").trim().toUpperCase();
+                if (val === "DENY" || val === "CONTINUE") variantUpdates[sku].inventoryPolicy = val;
+              }
+              if (fulfillmentColIdx !== -1) {
+                const val = String(rows[i][fulfillmentColIdx] ?? "").trim();
+                if (val) variantUpdates[sku].fulfillmentService = val;
+              }
+              if (option1ValueColIdx !== -1) {
+                const val = String(rows[i][option1ValueColIdx] ?? "").trim();
+                if (val) variantUpdates[sku].option1 = val;
+              }
+              if (option2ValueColIdx !== -1) {
+                const val = String(rows[i][option2ValueColIdx] ?? "").trim();
+                if (val) variantUpdates[sku].option2 = val;
+              }
+              if (option3ValueColIdx !== -1) {
+                const val = String(rows[i][option3ValueColIdx] ?? "").trim();
+                if (val) variantUpdates[sku].option3 = val;
+              }
+            }
+          }
+          
+          // Inventory item fields
+          if (shopify.invId) {
+            const hasInvUpdates = weightColIdx !== -1 || requiresShippingColIdx !== -1;
+            if (hasInvUpdates) {
+              inventoryItemUpdates[sku] = { invItemId: shopify.invId };
+              
+              if (weightColIdx !== -1) {
+                const val = String(rows[i][weightColIdx] ?? "").trim();
+                const weight = parseFloat(val.replace(/[^\d.-]/g, ""));
+                if (!isNaN(weight)) {
+                  inventoryItemUpdates[sku].weight = weight;
+                  inventoryItemUpdates[sku].weightUnit = weightUnitColIdx !== -1 
+                    ? String(rows[i][weightUnitColIdx] ?? "GRAMS").trim().toUpperCase()
+                    : "GRAMS";
+                }
+              }
+              if (requiresShippingColIdx !== -1) {
+                const val = String(rows[i][requiresShippingColIdx] ?? "").trim().toLowerCase();
+                inventoryItemUpdates[sku].requiresShipping = val !== "false" && val !== "no" && val !== "0";
               }
             }
           }
@@ -1154,33 +1331,79 @@ async function startServer() {
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(i + 50, updates.length), total: updates.length, message: `Step 2: Syncing updates to Shopify...` });
         }
 
-        // ── Step 3: Product-level updates (tags, status, images) ──
+        // ── Step 3: Product-level updates (ALL fields: title, description, vendor, etc.) ──
         const productUpdateEntries = Object.entries(productUpdates);
         let productUpdateCount = 0;
-        for (let pi = 0; pi < productUpdateEntries.length; pi += 25) {
+        console.log(`[SYNC] Step 3: Updating ${productUpdateEntries.length} products with ALL fields...`);
+        
+        for (let pi = 0; pi < productUpdateEntries.length; pi += 10) {
           if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
-          const chunk = productUpdateEntries.slice(pi, pi + 25);
+          const chunk = productUpdateEntries.slice(pi, pi + 10);
 
-          // Tags + status via productUpdate
-          const tagsStatusChunk = chunk.filter(([, upd]) => upd.tags !== undefined || upd.status);
-          if (tagsStatusChunk.length > 0) {
+          // Build productUpdate mutation with ALL product-level fields
+          const fieldsChunk = chunk.filter(([, upd]) => 
+            upd.title || upd.description || upd.vendor || upd.productType || upd.handle || 
+            upd.tags !== undefined || upd.status || upd.giftCard !== undefined
+          );
+          
+          if (fieldsChunk.length > 0) {
             let mutation = "mutation {";
-            tagsStatusChunk.forEach(([productId, upd], idx) => {
+            fieldsChunk.forEach(([productId, upd], idx) => {
               const inputParts: string[] = [`id: "${productId}"`];
+              if (upd.title) inputParts.push(`title: ${JSON.stringify(upd.title)}`);
+              if (upd.description) inputParts.push(`descriptionHtml: ${JSON.stringify(upd.description)}`);
+              if (upd.vendor) inputParts.push(`vendor: ${JSON.stringify(upd.vendor)}`);
+              if (upd.productType) inputParts.push(`productType: ${JSON.stringify(upd.productType)}`);
+              if (upd.handle) inputParts.push(`handle: ${JSON.stringify(upd.handle)}`);
               if (upd.tags !== undefined) inputParts.push(`tags: ${JSON.stringify(upd.tags)}`);
               if (upd.status) inputParts.push(`status: ${upd.status}`);
-              mutation += ` p${idx}: productUpdate(input: { ${inputParts.join(", ")} }) { product { id } userErrors { message } }`;
+              if (upd.giftCard !== undefined) inputParts.push(`giftCard: ${upd.giftCard}`);
+              mutation += ` p${idx}: productUpdate(input: { ${inputParts.join(", ")} }) { product { id title } userErrors { field message } }`;
             });
             mutation += " }";
+            
             const result = await shopifyGraphQL(shopDomain, accessToken, mutation);
             if (result.errors) logs.push(`Product Update Error: ${result.errors[0]?.message || JSON.stringify(result.errors)}`);
             Object.keys(result.data || {}).forEach(key => {
               const errs = result.data[key]?.userErrors;
-              if (errs?.length > 0) { logs.push(`Product Field Error: ${errs[0].message}`); } else productUpdateCount++;
+              if (errs?.length > 0) { 
+                logs.push(`Product Field Error: ${errs[0].message}`); 
+              } else { 
+                productUpdateCount++;
+              }
             });
           }
 
-          // Images via productCreateMedia
+          // Metafields via metafieldsSet
+          for (const [productId, upd] of chunk) {
+            if (!upd.metafields || upd.metafields.length === 0) continue;
+            
+            const metafieldsInput = upd.metafields.map(mf => ({
+              ownerId: productId,
+              namespace: mf.namespace,
+              key: mf.key,
+              type: mf.type,
+              value: mf.value
+            }));
+            
+            const mfMutation = `mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+              metafieldsSet(metafields: $metafields) {
+                metafields { id namespace key value }
+                userErrors { field message }
+              }
+            }`;
+            
+            const mfResult = await shopifyGraphQL(shopDomain, accessToken, mfMutation, { metafields: metafieldsInput });
+            const mfErrs = mfResult.data?.metafieldsSet?.userErrors;
+            if (mfErrs?.length > 0) {
+              logs.push(`Metafield Error (${productId}): ${mfErrs[0].message}`);
+              console.error(`[SYNC] Metafield error:`, mfErrs);
+            } else {
+              console.log(`[SYNC] Metafields set for product ${productId}: ${upd.metafields.length} fields`);
+            }
+          }
+
+          // Images via productCreateMedia (only if shouldSyncImages)
           for (const [productId, upd] of chunk) {
             if (!upd.imageSrc) continue;
             const safeSrc = upd.imageSrc.replace(/"/g, '\\"');
@@ -1190,10 +1413,105 @@ async function startServer() {
             if (imgErrs?.length > 0) { logs.push(`Image Error: ${imgErrs[0].message}`); } else productUpdateCount++;
           }
 
-          await updateSyncSession(shopDomain, { type: "progress", current: Math.min(pi + 25, productUpdateEntries.length), total: productUpdateEntries.length, message: "Step 3: Updating product fields (tags/status/images)..." });
+          await updateSyncSession(shopDomain, { type: "progress", current: Math.min(pi + 10, productUpdateEntries.length), total: productUpdateEntries.length, message: "Step 3: Updating product fields..." });
+        }
+        
+        // ── Step 4: Variant-level updates (barcode, taxable, options) ──
+        const variantUpdateEntries = Object.entries(variantUpdates);
+        let variantUpdateCount = 0;
+        if (variantUpdateEntries.length > 0) {
+          console.log(`[SYNC] Step 4: Updating ${variantUpdateEntries.length} variants...`);
+          
+          // Group by productId for productVariantsBulkUpdate
+          const byProduct: Record<string, Array<{ sku: string; variantId: string; data: any }>> = {};
+          for (const [sku, data] of variantUpdateEntries) {
+            if (!byProduct[data.productId]) byProduct[data.productId] = [];
+            byProduct[data.productId].push({ sku, variantId: data.variantId, data });
+          }
+          
+          const productIds = Object.keys(byProduct);
+          for (let vi = 0; vi < productIds.length; vi += 5) {
+            if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
+            const pidChunk = productIds.slice(vi, vi + 5);
+            
+            let mutation = "mutation {";
+            pidChunk.forEach((productId, pIdx) => {
+              const variants = byProduct[productId];
+              const variantInputs = variants.map(v => {
+                const fields: string[] = [`id: "${v.variantId}"`];
+                if (v.data.barcode) fields.push(`barcode: ${JSON.stringify(v.data.barcode)}`);
+                if (v.data.taxable !== undefined) fields.push(`taxable: ${v.data.taxable}`);
+                if (v.data.inventoryPolicy) fields.push(`inventoryPolicy: ${v.data.inventoryPolicy}`);
+                // Option values - these require specific handling in Shopify API 2025-01
+                // Note: Changing options on existing variants is complex and may require productVariantsBulkUpdate
+                return `{ ${fields.join(", ")} }`;
+              }).join(", ");
+              mutation += ` v${pIdx}: productVariantsBulkUpdate(productId: "${productId}", variants: [${variantInputs}]) { productVariants { id barcode } userErrors { field message } }`;
+            });
+            mutation += " }";
+            
+            const result = await shopifyGraphQL(shopDomain, accessToken, mutation);
+            if (result.errors) logs.push(`Variant Update Error: ${result.errors[0]?.message}`);
+            Object.keys(result.data || {}).forEach(key => {
+              const errs = result.data[key]?.userErrors;
+              if (errs?.length > 0) { 
+                logs.push(`Variant Field Error: ${errs[0].message}`); 
+              } else {
+                variantUpdateCount += byProduct[productIds[parseInt(key.slice(1))]]?.length || 0;
+              }
+            });
+            
+            await updateSyncSession(shopDomain, { type: "progress", current: Math.min(vi + 5, productIds.length), total: productIds.length, message: "Step 4: Updating variant fields..." });
+          }
+        }
+        
+        // ── Step 5: Inventory item updates (weight, requiresShipping) ──
+        const invItemUpdateEntries = Object.entries(inventoryItemUpdates);
+        let invItemUpdateCount = 0;
+        if (invItemUpdateEntries.length > 0) {
+          console.log(`[SYNC] Step 5: Updating ${invItemUpdateEntries.length} inventory items...`);
+          
+          for (let ii = 0; ii < invItemUpdateEntries.length; ii += 10) {
+            if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
+            const chunk = invItemUpdateEntries.slice(ii, ii + 10);
+            
+            for (const [sku, data] of chunk) {
+              const invItemInput: any = {};
+              if (data.weight !== undefined) {
+                invItemInput.measurement = {
+                  weight: {
+                    value: data.weight,
+                    unit: data.weightUnit || "GRAMS"
+                  }
+                };
+              }
+              if (data.requiresShipping !== undefined) {
+                invItemInput.requiresShipping = data.requiresShipping;
+              }
+              
+              if (Object.keys(invItemInput).length > 0) {
+                const invItemMutation = `mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
+                  inventoryItemUpdate(id: $id, input: $input) {
+                    inventoryItem { id }
+                    userErrors { field message }
+                  }
+                }`;
+                const invItemResult = await shopifyGraphQL(shopDomain, accessToken, invItemMutation, { id: data.invItemId, input: invItemInput });
+                const errs = invItemResult.data?.inventoryItemUpdate?.userErrors;
+                if (errs?.length > 0) {
+                  logs.push(`Inv Item Error (${sku}): ${errs[0].message}`);
+                } else {
+                  invItemUpdateCount++;
+                }
+              }
+            }
+            
+            await updateSyncSession(shopDomain, { type: "progress", current: Math.min(ii + 10, invItemUpdateEntries.length), total: invItemUpdateEntries.length, message: "Step 5: Updating inventory items..." });
+          }
         }
 
-        const totalUpdated = createdCount + (nonCreateUpdates.length - logs.filter(l => !l.includes("Create Error")).length) + productUpdateCount;
+        const totalUpdated = createdCount + (nonCreateUpdates.length - logs.filter(l => !l.includes("Create Error")).length) + productUpdateCount + variantUpdateCount + invItemUpdateCount;
+        console.log(`[SYNC] Complete: created=${createdCount}, product fields=${productUpdateCount}, variant fields=${variantUpdateCount}, inv items=${invItemUpdateCount}`);
         await updateSyncSession(shopDomain, { type: "complete", updatedCount: totalUpdated, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
       } catch (err: any) {
         console.error(`[SYNC] Global Error:`, err);
