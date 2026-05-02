@@ -741,8 +741,8 @@ async function startServer() {
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(fetchedCount, skusArray.length), total: skusArray.length, message: `Step 1: Fetching products (${Math.round(fetchedCount / skusArray.length * 100)}%)...` });
         }, 4);
 
-        // Product creation in full sync modes (all / all-no-images) with title mapping
-        const canCreateProducts = isFullSync && titleColIdx !== -1;
+        // Product creation ONLY in "Sync All" mode (not "all-no-images" which updates existing only)
+        const canCreateProducts = syncMode === "all" && titleColIdx !== -1;
         
         if (canCreateProducts) {
           console.log(`[SYNC] Product creation enabled - syncMode=all and title column found at index ${titleColIdx}`);
