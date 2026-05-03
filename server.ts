@@ -310,6 +310,257 @@ async function parallelBatch<T, R>(
   });
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// SHOPIFY BULK OPERATIONS for 10K+ products (2-5 min completion)
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Step 1: Create staged upload and get signed URL
+ */
+async function createStagedUpload(shopDomain: string, accessToken: string): Promise<{ url: string; resourceUrl: string; parameters: Array<{ name: string; value: string }> }> {
+  const mutation = `
+    mutation {
+      stagedUploadsCreate(input: [{
+        resource: BULK_MUTATION_VARIABLES,
+        filename: "bulk-operation.jsonl",
+        mimeType: "text/jsonl",
+        httpMethod: POST
+      }]) {
+        stagedTargets {
+          url
+          resourceUrl
+          parameters { name value }
+        }
+        userErrors { field message }
+      }
+    }
+  `;
+  
+  const result = await shopifyGraphQL(shopDomain, accessToken, mutation, {});
+  
+  if (result.data?.stagedUploadsCreate?.userErrors?.length > 0) {
+    throw new Error(`Staged upload error: ${result.data.stagedUploadsCreate.userErrors[0].message}`);
+  }
+  
+  const target = result.data?.stagedUploadsCreate?.stagedTargets?.[0];
+  if (!target) throw new Error("No staged upload target returned");
+  
+  console.log(`[BULK OPS] Staged upload created: ${target.url}`);
+  return target;
+}
+
+/**
+ * Step 2: Upload JSONL file to signed URL
+ */
+async function uploadJSONLFile(url: string, parameters: Array<{ name: string; value: string }>, jsonlContent: string): Promise<void> {
+  const FormData = (await import('form-data')).default;
+  const formData = new FormData();
+  
+  // Add parameters first (order matters for some cloud storage providers)
+  parameters.forEach(param => {
+    formData.append(param.name, param.value);
+  });
+  
+  // Add file last
+  formData.append('file', Buffer.from(jsonlContent, 'utf-8'), {
+    filename: 'bulk-operation.jsonl',
+    contentType: 'text/jsonl'
+  });
+  
+  const uploadResponse = await fetch(url, {
+    method: 'POST',
+    body: formData as any,
+    headers: formData.getHeaders()
+  });
+  
+  if (!uploadResponse.ok) {
+    const errorText = await uploadResponse.text();
+    throw new Error(`JSONL upload failed: ${uploadResponse.status} ${errorText}`);
+  }
+  
+  console.log(`[BULK OPS] JSONL uploaded successfully (${jsonlContent.length} bytes)`);
+}
+
+/**
+ * Step 3: Start bulk operation
+ */
+async function startBulkOperation(shopDomain: string, accessToken: string, stagedUploadPath: string): Promise<string> {
+  const mutation = `
+    mutation bulkOperationRunMutation($mutation: String!, $stagedUploadPath: String!) {
+      bulkOperationRunMutation(
+        mutation: $mutation,
+        stagedUploadPath: $stagedUploadPath
+      ) {
+        bulkOperation {
+          id
+          status
+          errorCode
+          createdAt
+          objectCount
+          fileSize
+          url
+          partialDataUrl
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+  
+  const variables = {
+    mutation: "mutation call($input: ProductUpdateInput!) { productUpdate(input: $input) { product { id } userErrors { message field } } }",
+    stagedUploadPath
+  };
+  
+  const result = await shopifyGraphQL(shopDomain, accessToken, mutation, variables);
+  
+  if (result.data?.bulkOperationRunMutation?.userErrors?.length > 0) {
+    throw new Error(`Bulk operation error: ${result.data.bulkOperationRunMutation.userErrors[0].message}`);
+  }
+  
+  const bulkOp = result.data?.bulkOperationRunMutation?.bulkOperation;
+  if (!bulkOp?.id) throw new Error("No bulk operation ID returned");
+  
+  console.log(`[BULK OPS] Bulk operation started: ${bulkOp.id} (status: ${bulkOp.status})`);
+  return bulkOp.id;
+}
+
+/**
+ * Step 4: Poll bulk operation until complete
+ */
+async function pollBulkOperation(shopDomain: string, accessToken: string, bulkOpId: string, onProgress?: (objectCount: number, status: string) => void): Promise<{ status: string; objectCount: number; url: string | null }> {
+  const query = `
+    query {
+      node(id: "${bulkOpId}") {
+        ... on BulkOperation {
+          id
+          status
+          errorCode
+          createdAt
+          completedAt
+          objectCount
+          fileSize
+          url
+          partialDataUrl
+        }
+      }
+    }
+  `;
+  
+  let attempts = 0;
+  const maxAttempts = 360; // 1 hour max (10 sec intervals)
+  
+  while (attempts < maxAttempts) {
+    await new Promise(resolve => setTimeout(resolve, 10000)); // Poll every 10 seconds
+    
+    const result = await shopifyGraphQL(shopDomain, accessToken, query, {});
+    const bulkOp = result.data?.node;
+    
+    if (!bulkOp) {
+      throw new Error("Bulk operation not found");
+    }
+    
+    console.log(`[BULK OPS] Poll ${attempts + 1}: status=${bulkOp.status}, objectCount=${bulkOp.objectCount}, fileSize=${bulkOp.fileSize}`);
+    
+    if (onProgress) {
+      onProgress(bulkOp.objectCount || 0, bulkOp.status);
+    }
+    
+    if (bulkOp.status === 'COMPLETED') {
+      console.log(`[BULK OPS] Bulk operation completed! ${bulkOp.objectCount} objects processed`);
+      return {
+        status: 'COMPLETED',
+        objectCount: bulkOp.objectCount || 0,
+        url: bulkOp.url
+      };
+    }
+    
+    if (bulkOp.status === 'FAILED' || bulkOp.status === 'CANCELED') {
+      throw new Error(`Bulk operation ${bulkOp.status.toLowerCase()}: ${bulkOp.errorCode || 'unknown error'}`);
+    }
+    
+    attempts++;
+  }
+  
+  throw new Error("Bulk operation timed out after 1 hour");
+}
+
+/**
+ * Step 5: Download and parse results JSONL
+ */
+async function downloadBulkResults(resultsUrl: string): Promise<Array<{ id?: string; userErrors?: Array<{ field: string; message: string }> }>> {
+  if (!resultsUrl) return [];
+  
+  const response = await fetch(resultsUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to download results: ${response.status}`);
+  }
+  
+  const jsonlText = await response.text();
+  const lines = jsonlText.trim().split('\n').filter(Boolean);
+  
+  console.log(`[BULK OPS] Downloaded ${lines.length} result lines`);
+  
+  return lines.map(line => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      console.error(`[BULK OPS] Failed to parse line: ${line}`);
+      return {};
+    }
+  });
+}
+
+/**
+ * Step 6: Build JSONL content from product updates
+ * For bulk operations, we focus on product-level fields (title, description, vendor, metafields)
+ * Price/stock/variants stay in optimized individual mutations (already fast enough)
+ * Each line: {"input": {...productUpdate variables...}}
+ */
+function buildBulkOperationJSONL(
+  productUpdates: Record<string, any>
+): string {
+  const jsonlLines: string[] = [];
+  
+  // ── Product-level updates ONLY (title, description, vendor, tags, status, metafields) ──
+  for (const [productId, upd] of Object.entries(productUpdates)) {
+    const input: any = { id: productId };
+    
+    if (upd.title) input.title = upd.title;
+    if (upd.description) input.descriptionHtml = upd.description;
+    if (upd.vendor) input.vendor = upd.vendor;
+    if (upd.productType) input.productType = upd.productType;
+    if (upd.handle) input.handle = upd.handle;
+    if (upd.tags !== undefined) input.tags = upd.tags;
+    if (upd.status) input.status = upd.status;
+    if (upd.giftCard !== undefined) input.giftCard = upd.giftCard;
+    
+    // Metafields (add to product input)
+    if (upd.metafields && upd.metafields.length > 0) {
+      input.metafields = upd.metafields.map((mf: any) => ({
+        namespace: mf.namespace,
+        key: mf.key,
+        type: mf.type,
+        value: mf.value
+      }));
+    }
+    
+    // Only add if there are actual field updates (skip image-only updates)
+    const hasFieldUpdates = input.title || input.descriptionHtml || input.vendor || 
+                           input.productType || input.handle || input.tags !== undefined || 
+                           input.status || input.giftCard !== undefined || input.metafields;
+    
+    if (hasFieldUpdates) {
+      jsonlLines.push(JSON.stringify({ input }));
+    }
+  }
+  
+  console.log(`[BULK OPS] Generated ${jsonlLines.length} JSONL lines for product updates`);
+  return jsonlLines.join('\n');
+}
+
 async function startServer() {
   // Init DB tables
   await initDatabase();
@@ -1427,6 +1678,87 @@ async function startServer() {
 
         if (nonCreateUpdates.length === 0 && Object.keys(productUpdates).length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: createdCount, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
 
+        // ──────────────────────────────────────────────────────────────────────
+        // BULK OPERATIONS for "Sync All" modes (2-5 min for 10K+ products)
+        // Handles: Product-level fields (title, description, vendor, tags, metafields)
+        // Then continues to price/stock/variants/images via optimized individual mutations
+        // ──────────────────────────────────────────────────────────────────────
+        const useBulkOperations = isFullSync && (Object.keys(productUpdates).length > 50);
+        let bulkSuccessCount = 0;
+        let productFieldsSyncedViaBulk = false;
+        
+        if (useBulkOperations) {
+          console.log(`[SYNC] Using BULK OPERATIONS for ${Object.keys(productUpdates).length} product field updates`);
+          
+          try {
+            // Step 1: Build JSONL content (product-level fields + metafields only)
+            await updateSyncSession(shopDomain, { type: "progress", current: 0, total: 100, message: "Step 3/7: Preparing bulk operation..." });
+            const jsonlContent = buildBulkOperationJSONL(productUpdates);
+            
+            if (!jsonlContent || jsonlContent.trim().length === 0) {
+              console.log(`[SYNC] No JSONL content generated, using individual mutations for all updates`);
+            } else {
+              // Step 2: Create staged upload
+              await updateSyncSession(shopDomain, { type: "progress", current: 10, total: 100, message: "Step 3/7: Creating staged upload..." });
+              const stagedUpload = await createStagedUpload(shopDomain, accessToken);
+              
+              // Step 3: Upload JSONL file
+              await updateSyncSession(shopDomain, { type: "progress", current: 20, total: 100, message: "Step 3/7: Uploading data to Shopify..." });
+              await uploadJSONLFile(stagedUpload.url, stagedUpload.parameters, jsonlContent);
+              
+              // Step 4: Start bulk operation
+              await updateSyncSession(shopDomain, { type: "progress", current: 30, total: 100, message: "Step 3/7: Starting bulk operation..." });
+              const bulkOpId = await startBulkOperation(shopDomain, accessToken, stagedUpload.resourceUrl);
+              
+              // Step 5: Poll until complete (with progress updates)
+              await updateSyncSession(shopDomain, { type: "progress", current: 40, total: 100, message: "Step 3/7: Processing bulk operation (this takes 2-5 minutes)..." });
+              
+              const bulkResult = await pollBulkOperation(shopDomain, accessToken, bulkOpId, (objectCount, status) => {
+                const progress = 40 + Math.floor((objectCount / Object.keys(productUpdates).length) * 40);
+                updateSyncSession(shopDomain, { 
+                  type: "progress", 
+                  current: Math.min(progress, 80), 
+                  total: 100, 
+                  message: `Step 3/7: Shopify processing ${objectCount}/${Object.keys(productUpdates).length} products... (${status})` 
+                }).catch(e => console.error(`[SYNC] Progress update failed:`, e));
+              });
+              
+              // Step 6: Download and parse results
+              await updateSyncSession(shopDomain, { type: "progress", current: 85, total: 100, message: "Step 3/7: Downloading results..." });
+              const results = bulkResult.url ? await downloadBulkResults(bulkResult.url) : [];
+              
+              // Step 7: Process results
+              let bulkErrorCount = 0;
+              
+              results.forEach((result: any) => {
+                if (result.userErrors && result.userErrors.length > 0) {
+                  bulkErrorCount++;
+                  logs.push(`Bulk Error: ${result.userErrors[0].message}`);
+                  console.error(`[BULK OPS] Error:`, result.userErrors[0]);
+                } else {
+                  bulkSuccessCount++;
+                }
+              });
+              
+              console.log(`[SYNC] Bulk operation completed: ${bulkSuccessCount} products updated, ${bulkErrorCount} errors`);
+              logs.push(`Bulk operation: ${bulkSuccessCount} products updated (fields + metafields)`);
+              productFieldsSyncedViaBulk = true;
+              
+              // Clear productUpdates since they've been processed via bulk ops
+              // This prevents them from being processed again in individual mutation loops
+              Object.keys(productUpdates).forEach(key => delete productUpdates[key]);
+            }
+          } catch (bulkError: any) {
+            console.error(`[SYNC] Bulk operation failed:`, bulkError.message);
+            logs.push(`Bulk operation failed: ${bulkError.message} - continuing with individual mutations`);
+            // Fall through to individual mutations below
+          }
+        }
+
+        // ──────────────────────────────────────────────────────────────────────
+        // INDIVIDUAL MUTATIONS for price/stock/variants/images (or fallback)
+        // ──────────────────────────────────────────────────────────────────────
+
         for (let i = 0; i < nonCreateUpdates.length; i += 50) {
           if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
           const batch = nonCreateUpdates.slice(i, i + 50);
@@ -1710,8 +2042,8 @@ async function startServer() {
           }
         }
 
-        const totalUpdated = createdCount + (nonCreateUpdates.length - logs.filter(l => !l.includes("Create Error")).length) + productUpdateCount + variantUpdateCount + invItemUpdateCount;
-        console.log(`[SYNC] Complete: created=${createdCount}, product fields=${productUpdateCount}, variant fields=${variantUpdateCount}, inv items=${invItemUpdateCount}`);
+        const totalUpdated = createdCount + bulkSuccessCount + (nonCreateUpdates.length - logs.filter(l => !l.includes("Create Error")).length) + productUpdateCount + variantUpdateCount + invItemUpdateCount;
+        console.log(`[SYNC] Complete: created=${createdCount}, bulk=${bulkSuccessCount}, product fields=${productUpdateCount}, variant fields=${variantUpdateCount}, inv items=${invItemUpdateCount}`);
         await updateSyncSession(shopDomain, { type: "complete", updatedCount: totalUpdated, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
       } catch (err: any) {
         console.error(`[SYNC] Global Error:`, err);
