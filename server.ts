@@ -758,6 +758,12 @@ async function startServer() {
     
     try {
       console.log("[UPDATE STORE] Request body keys:", Object.keys(req.body));
+      console.log("[UPDATE STORE] Raw body:", JSON.stringify(req.body, null, 2));
+      console.log("[UPDATE STORE] sheetName/sheet_name:", sheetName, sheet_name);
+      console.log("[UPDATE STORE] skuCol/sku_col:", skuCol, sku_col);
+      console.log("[UPDATE STORE] priceCol/price_col:", priceCol, price_col);
+      console.log("[UPDATE STORE] compareAtPriceCol/compare_at_price_col:", compareAtPriceCol, compare_at_price_col);
+      console.log("[UPDATE STORE] inventoryCol/inventory_col:", inventoryCol, inventory_col);
       console.log("[UPDATE STORE] fieldMappings:", fieldMappings || field_mappings);
       console.log("[UPDATE STORE] metafieldMappings:", metafieldMappings || metafield_mappings);
       
@@ -772,6 +778,15 @@ async function startServer() {
       const finalInventoryCol = inventoryCol || inventory_col || "Inventory";
       const finalFieldMappings = fieldMappings || field_mappings || {};
       const finalMetafieldMappings = metafieldMappings || metafield_mappings || [];
+      
+      console.log("[UPDATE STORE] Final values to save:");
+      console.log("  - sheetName:", finalSheetName);
+      console.log("  - skuCol:", finalSkuCol);
+      console.log("  - priceCol:", finalPriceCol);
+      console.log("  - compareAtPriceCol:", finalCompareAtPriceCol);
+      console.log("  - inventoryCol:", finalInventoryCol);
+      console.log("  - fieldMappings:", JSON.stringify(finalFieldMappings));
+      console.log("  - metafieldMappings:", JSON.stringify(finalMetafieldMappings));
       
       // If serviceAccountJson is blank, keep the existing value in DB
       let finalServiceAccountJson = serviceAccountJson || service_account_json;
