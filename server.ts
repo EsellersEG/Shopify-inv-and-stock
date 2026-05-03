@@ -739,6 +739,33 @@ async function startServer() {
       console.log("[DB DEBUG] master_stores column keys:", Object.keys(r));
       _storeColumnsLogged = true;
     }
+    
+    // Parse field_mappings and metafield_mappings from JSON strings to objects
+    let fieldMappings = {};
+    let metafieldMappings = [];
+    
+    try {
+      const fieldMappingsRaw = r.field_mappings || r.fieldMappings;
+      if (typeof fieldMappingsRaw === 'string') {
+        fieldMappings = JSON.parse(fieldMappingsRaw);
+      } else if (fieldMappingsRaw && typeof fieldMappingsRaw === 'object') {
+        fieldMappings = fieldMappingsRaw;
+      }
+    } catch (e) {
+      console.error('[normalizeStore] Failed to parse field_mappings:', e);
+    }
+    
+    try {
+      const metafieldMappingsRaw = r.metafield_mappings || r.metafieldMappings;
+      if (typeof metafieldMappingsRaw === 'string') {
+        metafieldMappings = JSON.parse(metafieldMappingsRaw);
+      } else if (Array.isArray(metafieldMappingsRaw)) {
+        metafieldMappings = metafieldMappingsRaw;
+      }
+    } catch (e) {
+      console.error('[normalizeStore] Failed to parse metafield_mappings:', e);
+    }
+    
     return {
       id: r.id,
       name: r.name,
@@ -746,14 +773,14 @@ async function startServer() {
       accessToken: r.access_token || r.accessToken,
       spreadsheetId: r.spreadsheet_id || r.spreadsheetId,
       serviceAccountJson: r.service_account_json || r.serviceAccountJson,
-      sheet_name: r.sheet_name || r.sheetName,
-      sku_col: r.sku_col || r.skuCol,
-      price_col: r.price_col || r.priceCol,
-      compare_at_price_col: r.compare_at_price_col || r.compareAtPriceCol,
-      inventory_col: r.inventory_col || r.inventoryCol,
-      field_mappings: r.field_mappings || r.fieldMappings,
-      metafield_mappings: r.metafield_mappings || r.metafieldMappings,
-      created_at: r.created_at || r.installedAt,
+      sheetName: r.sheet_name || r.sheetName,
+      skuCol: r.sku_col || r.skuCol,
+      priceCol: r.price_col || r.priceCol,
+      compareAtPriceCol: r.compare_at_price_col || r.compareAtPriceCol,
+      inventoryCol: r.inventory_col || r.inventoryCol,
+      fieldMappings,
+      metafieldMappings,
+      createdAt: r.created_at || r.installedAt,
     };
   };
 
