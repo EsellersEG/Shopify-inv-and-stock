@@ -820,7 +820,22 @@ async function startServer() {
       if (rows.length === 0) return res.status(404).json({ error: "Store not found" });
       
       console.log("[UPDATE STORE] Success! Updated store:", rows[0].id);
-      res.json(normalizeStore(rows[0]));
+      console.log("[UPDATE STORE] DB row sheetName:", rows[0].sheet_name);
+      console.log("[UPDATE STORE] DB row skuCol:", rows[0].sku_col);
+      console.log("[UPDATE STORE] DB row priceCol:", rows[0].price_col);
+      
+      const normalized = normalizeStore(rows[0]);
+      console.log("[UPDATE STORE] Normalized response:", JSON.stringify({
+        id: normalized.id,
+        name: normalized.name,
+        sheetName: normalized.sheetName,
+        skuCol: normalized.skuCol,
+        priceCol: normalized.priceCol,
+        compareAtPriceCol: normalized.compareAtPriceCol,
+        inventoryCol: normalized.inventoryCol
+      }, null, 2));
+      
+      res.json(normalized);
     } catch (e: any) {
       console.error("[UPDATE STORE] Error:", e);
       res.status(400).json({ error: e.message || "Store update failed or domain conflict" });
