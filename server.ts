@@ -1802,9 +1802,9 @@ async function startServer() {
           console.log(`[SYNC] Creating ${createBatch.length} new products (${totalExistingToUpdate} existing queued for update)...`);
           await updateSyncSession(shopDomain, { type: "progress", current: 0, total: createBatch.length, message: `Step 2/6: Creating ${createBatch.length} NEW products (${totalExistingToUpdate} existing queued for update)...` });
           
-          // Process creates SEQUENTIALLY - each product needs 5-6 API calls, too many in parallel causes throttling
-          for (let idx = 0; idx < createBatch.length; idx++) {
-            const item = createBatch[idx];
+          // Process creates in PARALLEL batches — 5 concurrent product pipelines
+          let createProgress = 0;
+          await parallelBatch(createBatch, async (item, idx) => {
             if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
             
             // Build product input with ALL mapped fields
@@ -1855,14 +1855,16 @@ async function startServer() {
               }
             }`;
             
-            const result = await shopifyGraphQL(shopDomain, accessToken, createMutation, { input: productInput });
+            const result = await shopifyGraphQLFast(shopDomain, accessToken, createMutation, { input: productInput });
             
             if (result.errors) {
               const msg = `Create Error (${item.sku}): ${result.errors[0]?.message || JSON.stringify(result.errors)}`;
               console.error(`[SYNC] ${msg}`);
               logs.push(msg);
               syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: result.errors[0]?.message || "Unknown error", rowNumber: item.rowNumber });
-              continue;
+              createProgress++;
+              await updateSyncSession(shopDomain, { type: "progress", current: createProgress, total: createBatch.length, message: `Step 2/6: Creating NEW products (${createProgress}/${createBatch.length})...` });
+              return;
             }
             
             const userErrors = result.data?.productCreate?.userErrors;
@@ -1871,7 +1873,9 @@ async function startServer() {
               console.error(`[SYNC] ${msg}`);
               logs.push(msg);
               syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: userErrors[0].message, rowNumber: item.rowNumber });
-              continue;
+              createProgress++;
+              await updateSyncSession(shopDomain, { type: "progress", current: createProgress, total: createBatch.length, message: `Step 2/6: Creating NEW products (${createProgress}/${createBatch.length})...` });
+              return;
             }
             
             const newProduct = result.data?.productCreate?.product;
@@ -1899,7 +1903,7 @@ async function startServer() {
                     userErrors { field message }
                   }
                 }`;
-                const variantResult = await shopifyGraphQL(shopDomain, accessToken, variantMutation, { productId: newProduct.id, variants: [variantInput] });
+                const variantResult = await shopifyGraphQLFast(shopDomain, accessToken, variantMutation, { productId: newProduct.id, variants: [variantInput] });
                 if (variantResult.data?.productVariantsBulkUpdate?.userErrors?.length > 0) {
                   const errMsg = variantResult.data.productVariantsBulkUpdate.userErrors[0].message;
                   console.error(`[SYNC] Variant update error for ${item.sku}:`, errMsg);
@@ -1933,7 +1937,7 @@ async function startServer() {
                       userErrors { field message }
                     }
                   }`;
-                  const invItemResult = await shopifyGraphQL(shopDomain, accessToken, invItemMutation, { id: invItemId, input: invItemInput });
+                  const invItemResult = await shopifyGraphQLFast(shopDomain, accessToken, invItemMutation, { id: invItemId, input: invItemInput });
                   if (invItemResult.data?.inventoryItemUpdate?.userErrors?.length > 0) {
                     const errMsg = invItemResult.data.inventoryItemUpdate.userErrors[0].message;
                     console.error(`[SYNC] Inventory item update error for ${item.sku}:`, errMsg);
@@ -1954,7 +1958,7 @@ async function startServer() {
               if (locationId && item.inventory > 0 && invItemId) {
                 const invMutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
                 const invVars = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: [{ inventoryItemId: invItemId, locationId: `gid://shopify/Location/${locationId}`, quantity: item.inventory }] } };
-                await shopifyGraphQL(shopDomain, accessToken, invMutation, invVars);
+                await shopifyGraphQLFast(shopDomain, accessToken, invMutation, invVars);
                 console.log(`[SYNC] Inventory set: ${item.sku} -> ${item.inventory}`);
               }
               
@@ -1970,7 +1974,7 @@ async function startServer() {
                       mediaUserErrors { message }
                     }
                   }`;
-                  const imgResult = await shopifyGraphQL(shopDomain, accessToken, imgMutation, {
+                  const imgResult = await shopifyGraphQLFast(shopDomain, accessToken, imgMutation, {
                     productId: newProduct.id,
                     media: [{ mediaContentType: "IMAGE", originalSource: directUrl }]
                   });
@@ -1994,7 +1998,7 @@ async function startServer() {
                       mediaUserErrors { message }
                     }
                   }`;
-                  await shopifyGraphQL(shopDomain, accessToken, imgMutation, {
+                  await shopifyGraphQLFast(shopDomain, accessToken, imgMutation, {
                     productId: newProduct.id,
                     media: [{ mediaContentType: "IMAGE", originalSource: directUrl }]
                   });
@@ -2009,7 +2013,7 @@ async function startServer() {
                     userErrors { field message }
                   }
                 }`;
-                const publishResult = await shopifyGraphQL(shopDomain, accessToken, publishMutation, {
+                const publishResult = await shopifyGraphQLFast(shopDomain, accessToken, publishMutation, {
                   id: newProduct.id,
                   input: [{ publicationId: onlineStorePublicationId }]
                 });
@@ -2043,14 +2047,14 @@ async function startServer() {
                     userErrors { field message }
                   }
                 }`;
-                const mfResult = await shopifyGraphQL(shopDomain, accessToken, mfMutation, { metafields: metafieldsInput });
+                const mfResult = await shopifyGraphQLFast(shopDomain, accessToken, mfMutation, { metafields: metafieldsInput });
                 const mfErrs = mfResult.data?.metafieldsSet?.userErrors;
                 if (mfErrs?.length > 0) {
                   console.error(`[SYNC] Batch metafield error for ${item.sku}, retrying individually:`, mfErrs[0].message);
                   // Atomic failure — retry each metafield individually
                   let mfOk = 0;
                   for (const singleMf of metafieldsInput) {
-                    const singleResult = await shopifyGraphQL(shopDomain, accessToken, mfMutation, { metafields: [singleMf] });
+                    const singleResult = await shopifyGraphQLFast(shopDomain, accessToken, mfMutation, { metafields: [singleMf] });
                     const singleErrs = singleResult.data?.metafieldsSet?.userErrors;
                     if (singleErrs?.length > 0) {
                       console.error(`[SYNC] Metafield ${singleMf.namespace}.${singleMf.key} FAILED: ${singleErrs[0].message}`);
@@ -2063,12 +2067,11 @@ async function startServer() {
                 }
               }
               
-              // Add delay between full product creations to avoid throttling
-              await new Promise(r => setTimeout(r, 500));
             }
             
-            await updateSyncSession(shopDomain, { type: "progress", current: idx + 1, total: createBatch.length, message: `Step 2/6: Creating NEW products (${idx + 1}/${createBatch.length})...` });
-          }
+            createProgress++;
+            await updateSyncSession(shopDomain, { type: "progress", current: createProgress, total: createBatch.length, message: `Step 2/6: Creating NEW products (${createProgress}/${createBatch.length})...` });
+          }, 5); // 5 concurrent product creation pipelines
           
           console.log(`[SYNC] Created ${createdCount} products`);
         }
