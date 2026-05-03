@@ -198,6 +198,26 @@ function evaluateRules(rules: any[], rowData: Record<string, string>): boolean {
   return result;
 }
 
+// ── Convert Google Drive / Dropbox share links to direct download URLs ──
+function convertToDirectUrl(url: string): string {
+  url = url.trim();
+  // Google Drive: https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+  const driveMatch = url.match(/drive\.google\.com\/file\/d\/([^/]+)/);
+  if (driveMatch) {
+    return `https://drive.google.com/uc?export=download&id=${driveMatch[1]}`;
+  }
+  // Google Drive: https://drive.google.com/open?id=FILE_ID
+  const driveMatch2 = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
+  if (driveMatch2) {
+    return `https://drive.google.com/uc?export=download&id=${driveMatch2[1]}`;
+  }
+  // Dropbox: change dl=0 to dl=1
+  if (url.includes("dropbox.com")) {
+    return url.replace("dl=0", "dl=1");
+  }
+  return url;
+}
+
 // ── Shopify GraphQL helper with rate limiting & retry ──
 async function shopifyGraphQL(
   shopDomain: string,
@@ -565,12 +585,26 @@ async function startServer() {
     } else if (data.type === "error") {
       session.status = "error";
       session.message = data.message;
+      session.logs = data.logs || [data.message];
       try {
+        const errLogId = data.syncLogId || randomUUID();
         await pool.query(
-          "INSERT INTO sync_logs (id, shop_domain, status, message, logs) VALUES ($1, $2, $3, $4, $5)",
-          [data.syncLogId || randomUUID(), shopDomain, "error", data.message, [data.message]]
+          "INSERT INTO sync_logs (id, shop_domain, status, message, updated_count, error_count, duration, logs) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+          [errLogId, shopDomain, "error", data.message, 0, 1, data.duration || 0, data.logs || [data.message]]
         );
-      } catch {}
+        // Also save any results collected before the error
+        if (data.syncResults && data.syncResults.length > 0) {
+          for (let k = 0; k < data.syncResults.length; k += 100) {
+            const batch = data.syncResults.slice(k, k + 100);
+            const placeholders = batch.map((_: any, bi: number) => {
+              const base = bi * 8;
+              return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8})`;
+            }).join(',');
+            const values = batch.flatMap((r: any) => [randomUUID(), errLogId, shopDomain, r.sku, r.status, r.action, r.message || '', r.rowNumber]);
+            await pool.query(`INSERT INTO sync_results (id,sync_log_id,shop_domain,sku,status,action,message,row_number) VALUES ${placeholders}`, values);
+          }
+        }
+      } catch (dbErr) { console.error("Failed to save error sync log:", dbErr); }
     }
     (session.clients || []).forEach((c: any) => c.res.write(`data: ${JSON.stringify(data)}\n\n`));
   };
@@ -591,8 +625,11 @@ async function startServer() {
     syncSessions[shopDomain] = { status: "loading", progress: { current: 0, total: 0 }, message: "Starting...", logs: [], clients: syncSessions[shopDomain]?.clients || [], cancelled: false };
 
     (async () => {
+      const startTime = Date.now();
+      const syncLogId = randomUUID();
+      const syncResultsArr: Array<{sku: string; status: string; action: string; message: string; rowNumber: number}> = [];
+      const logs: string[] = [];
       try {
-        const startTime = Date.now();
         await updateSyncSession(shopDomain, { type: "progress", current: 0, total: 0, message: "Step 1: Fetching Data..." });
 
         const credentials = JSON.parse(serviceAccountJson);
@@ -615,8 +652,6 @@ async function startServer() {
         if (skuIndex === -1) return await updateSyncSession(shopDomain, { type: "error", message: `SKU column "${mapping.sku}" not found in sheet` });
 
         // Load filter rules for this store
-        const syncLogId = randomUUID();
-        const syncResultsArr: Array<{sku: string; status: string; action: string; message: string; rowNumber: number}> = [];
         let filterRules: any[] = [];
         let fieldMappings: Record<string, string> = {};
         let metafieldMappings: Array<{ namespace: string; key: string; type: string; sheetColumn: string }> = [];
@@ -744,7 +779,6 @@ async function startServer() {
 
         const skusArray = Array.from(new Set(rows.slice(1).map((r: any) => r[skuIndex]).filter(Boolean)));
         const shopifyVariants = new Map();
-        const logs: string[] = [];
 
         // ── Step 1: Parallel SKU lookups (4 concurrent batches) ──
         const skuBatches: string[][] = [];
@@ -1274,23 +1308,47 @@ async function startServer() {
                 console.log(`[SYNC] Inventory set: ${item.sku} -> ${item.inventory}`);
               }
               
-              // Step 4: Add product image if provided
+              // Step 4: Add product images (supports comma-separated URLs)
               if (item.imageSrc) {
-                const safeSrc = item.imageSrc.replace(/"/g, '\\"');
-                const imgMutation = `mutation { productCreateMedia(productId: "${newProduct.id}", media: [{ mediaContentType: IMAGE, originalSource: "${safeSrc}" }]) { mediaUserErrors { message } } }`;
-                const imgResult = await shopifyGraphQL(shopDomain, accessToken, imgMutation);
-                if (imgResult.data?.productCreateMedia?.mediaUserErrors?.length > 0) {
-                  console.error(`[SYNC] Image error for ${item.sku}:`, imgResult.data.productCreateMedia.mediaUserErrors[0].message);
-                } else {
-                  console.log(`[SYNC] Image added: ${item.sku}`);
+                const allImageUrls = item.imageSrc.split(',').map((u: string) => u.trim()).filter(Boolean);
+                for (let imgIdx = 0; imgIdx < allImageUrls.length; imgIdx++) {
+                  const rawUrl = allImageUrls[imgIdx];
+                  const directUrl = convertToDirectUrl(rawUrl);
+                  const imgMutation = `mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+                    productCreateMedia(productId: $productId, media: $media) {
+                      media { id }
+                      mediaUserErrors { message }
+                    }
+                  }`;
+                  const imgResult = await shopifyGraphQL(shopDomain, accessToken, imgMutation, {
+                    productId: newProduct.id,
+                    media: [{ mediaContentType: "IMAGE", originalSource: directUrl }]
+                  });
+                  if (imgResult.data?.productCreateMedia?.mediaUserErrors?.length > 0) {
+                    console.error(`[SYNC] Image ${imgIdx+1} error for ${item.sku}:`, imgResult.data.productCreateMedia.mediaUserErrors[0].message);
+                    logs.push(`Image Error (${item.sku}) #${imgIdx+1}: ${imgResult.data.productCreateMedia.mediaUserErrors[0].message}`);
+                  } else {
+                    console.log(`[SYNC] Image ${imgIdx+1}/${allImageUrls.length} added: ${item.sku}`);
+                  }
                 }
               }
               
               // Step 5: Add variant image if different from product image
               if (item.variantImage && item.variantImage !== item.imageSrc) {
-                const safeSrc = item.variantImage.replace(/"/g, '\\"');
-                const imgMutation = `mutation { productCreateMedia(productId: "${newProduct.id}", media: [{ mediaContentType: IMAGE, originalSource: "${safeSrc}" }]) { mediaUserErrors { message } } }`;
-                await shopifyGraphQL(shopDomain, accessToken, imgMutation);
+                const variantUrls = item.variantImage.split(',').map((u: string) => u.trim()).filter(Boolean);
+                for (const rawUrl of variantUrls) {
+                  const directUrl = convertToDirectUrl(rawUrl);
+                  const imgMutation = `mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+                    productCreateMedia(productId: $productId, media: $media) {
+                      media { id }
+                      mediaUserErrors { message }
+                    }
+                  }`;
+                  await shopifyGraphQL(shopDomain, accessToken, imgMutation, {
+                    productId: newProduct.id,
+                    media: [{ mediaContentType: "IMAGE", originalSource: directUrl }]
+                  });
+                }
               }
               
               // Step 6: Publish product to Online Store sales channel
@@ -1530,14 +1588,29 @@ async function startServer() {
             }
           }
 
-          // Images via productCreateMedia (only if shouldSyncImages)
+          // Images via productCreateMedia (only if shouldSyncImages, supports comma-separated)
           for (const [productId, upd] of chunk) {
             if (!upd.imageSrc) continue;
-            const safeSrc = upd.imageSrc.replace(/"/g, '\\"');
-            const imgMutation = `mutation { productCreateMedia(productId: "${productId}", media: [{ mediaContentType: IMAGE, originalSource: "${safeSrc}" }]) { mediaUserErrors { message } } }`;
-            const imgResult = await shopifyGraphQL(shopDomain, accessToken, imgMutation);
-            const imgErrs = imgResult.data?.productCreateMedia?.mediaUserErrors;
-            if (imgErrs?.length > 0) { logs.push(`Image Error: ${imgErrs[0].message}`); } else productUpdateCount++;
+            const allImageUrls = upd.imageSrc.split(',').map((u: string) => u.trim()).filter(Boolean);
+            for (let imgIdx = 0; imgIdx < allImageUrls.length; imgIdx++) {
+              const directUrl = convertToDirectUrl(allImageUrls[imgIdx]);
+              const imgMutation = `mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+                productCreateMedia(productId: $productId, media: $media) {
+                  media { id }
+                  mediaUserErrors { message }
+                }
+              }`;
+              const imgResult = await shopifyGraphQL(shopDomain, accessToken, imgMutation, {
+                productId,
+                media: [{ mediaContentType: "IMAGE", originalSource: directUrl }]
+              });
+              const imgErrs = imgResult.data?.productCreateMedia?.mediaUserErrors;
+              if (imgErrs?.length > 0) {
+                logs.push(`Image Error (${productId}) #${imgIdx+1}: ${imgErrs[0].message}`);
+              } else if (imgIdx === 0) {
+                productUpdateCount++;
+              }
+            }
           }
 
           await updateSyncSession(shopDomain, { type: "progress", current: Math.min(pi + 10, productUpdateEntries.length), total: productUpdateEntries.length, message: `Step 4/6: Updating product fields & metafields (${Math.min(pi + 10, productUpdateEntries.length)}/${productUpdateEntries.length})...` });
@@ -1642,7 +1715,7 @@ async function startServer() {
         await updateSyncSession(shopDomain, { type: "complete", updatedCount: totalUpdated, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
       } catch (err: any) {
         console.error(`[SYNC] Global Error:`, err);
-        await updateSyncSession(shopDomain, { type: "error", message: err.message });
+        await updateSyncSession(shopDomain, { type: "error", message: err.message, syncLogId, syncResults: syncResultsArr, logs, duration: Date.now() - startTime });
       }
     })();
     res.json({ success: true });
