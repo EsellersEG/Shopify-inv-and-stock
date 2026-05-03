@@ -656,16 +656,73 @@ async function startServer() {
   });
 
   app.post("/api/admin/master-stores", authenticateToken, isAdmin, async (req: Request, res: Response) => {
-    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, compareAtPriceCol, inventoryCol, fieldMappings, metafieldMappings } = req.body;
+    const { 
+      name, 
+      shopDomain, 
+      shop_domain,
+      accessToken, 
+      access_token,
+      spreadsheetId, 
+      spreadsheet_id,
+      serviceAccountJson, 
+      service_account_json,
+      sheetName, 
+      sheet_name,
+      skuCol, 
+      sku_col,
+      priceCol, 
+      price_col,
+      compareAtPriceCol, 
+      compare_at_price_col,
+      inventoryCol, 
+      inventory_col,
+      fieldMappings, 
+      field_mappings,
+      metafieldMappings,
+      metafield_mappings
+    } = req.body;
+    
     try {
+      console.log("[CREATE STORE] Request body keys:", Object.keys(req.body));
+      
+      // Accept both camelCase and snake_case
+      const finalShopDomain = shopDomain || shop_domain;
+      const finalAccessToken = accessToken || access_token;
+      const finalSpreadsheetId = spreadsheetId || spreadsheet_id;
+      const finalServiceAccountJson = serviceAccountJson || service_account_json;
+      const finalSheetName = sheetName || sheet_name || "Sheet1";
+      const finalSkuCol = skuCol || sku_col || "SKU";
+      const finalPriceCol = priceCol || price_col || "Price";
+      const finalCompareAtPriceCol = compareAtPriceCol || compare_at_price_col || "Compare At Price";
+      const finalInventoryCol = inventoryCol || inventory_col || "Inventory";
+      const finalFieldMappings = fieldMappings || field_mappings || {};
+      const finalMetafieldMappings = metafieldMappings || metafield_mappings || [];
+      
       const id = randomUUID();
       const { rows } = await pool.query(
         `INSERT INTO master_stores (id, name, shop_domain, access_token, spreadsheet_id, service_account_json, sheet_name, sku_col, price_col, compare_at_price_col, inventory_col, field_mappings, metafield_mappings)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
-        [id, name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", JSON.stringify(fieldMappings || {}), JSON.stringify(metafieldMappings || [])]
+        [
+          id, 
+          name || "Unlabeled Store", 
+          finalShopDomain, 
+          finalAccessToken, 
+          finalSpreadsheetId, 
+          finalServiceAccountJson, 
+          finalSheetName, 
+          finalSkuCol, 
+          finalPriceCol, 
+          finalCompareAtPriceCol, 
+          finalInventoryCol, 
+          JSON.stringify(finalFieldMappings), 
+          JSON.stringify(finalMetafieldMappings)
+        ]
       );
+      
+      console.log("[CREATE STORE] Success! Created store:", rows[0].id);
       res.json(normalizeStore(rows[0]));
     } catch (e: any) {
+      console.error("[CREATE STORE] Error:", e);
       res.status(400).json({ error: "Store domain already exists" });
     }
   });
@@ -673,25 +730,84 @@ async function startServer() {
   // Admin: Update Master Store
   app.put("/api/admin/master-stores/:id", authenticateToken, isAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
-    const { name, shopDomain, accessToken, spreadsheetId, serviceAccountJson, sheetName, skuCol, priceCol, compareAtPriceCol, inventoryCol, fieldMappings, metafieldMappings } = req.body;
+    const { 
+      name, 
+      shopDomain, 
+      shop_domain,
+      accessToken, 
+      access_token,
+      spreadsheetId, 
+      spreadsheet_id,
+      serviceAccountJson, 
+      service_account_json,
+      sheetName, 
+      sheet_name,
+      skuCol, 
+      sku_col,
+      priceCol, 
+      price_col,
+      compareAtPriceCol, 
+      compare_at_price_col,
+      inventoryCol, 
+      inventory_col,
+      fieldMappings, 
+      field_mappings,
+      metafieldMappings,
+      metafield_mappings
+    } = req.body;
+    
     try {
+      console.log("[UPDATE STORE] Request body keys:", Object.keys(req.body));
+      console.log("[UPDATE STORE] fieldMappings:", fieldMappings || field_mappings);
+      console.log("[UPDATE STORE] metafieldMappings:", metafieldMappings || metafield_mappings);
+      
+      // Accept both camelCase and snake_case
+      const finalShopDomain = shopDomain || shop_domain;
+      const finalAccessToken = accessToken || access_token;
+      const finalSpreadsheetId = spreadsheetId || spreadsheet_id;
+      const finalSheetName = sheetName || sheet_name || "Sheet1";
+      const finalSkuCol = skuCol || sku_col || "SKU";
+      const finalPriceCol = priceCol || price_col || "Price";
+      const finalCompareAtPriceCol = compareAtPriceCol || compare_at_price_col || "Compare At Price";
+      const finalInventoryCol = inventoryCol || inventory_col || "Inventory";
+      const finalFieldMappings = fieldMappings || field_mappings || {};
+      const finalMetafieldMappings = metafieldMappings || metafield_mappings || [];
+      
       // If serviceAccountJson is blank, keep the existing value in DB
-      let finalServiceAccountJson = serviceAccountJson;
+      let finalServiceAccountJson = serviceAccountJson || service_account_json;
       if (!finalServiceAccountJson || String(finalServiceAccountJson).trim() === "") {
         const { rows: existing } = await pool.query("SELECT service_account_json FROM master_stores WHERE id = $1", [id]);
         if (existing.length === 0) return res.status(404).json({ error: "Store not found" });
         finalServiceAccountJson = existing[0].service_account_json;
       }
+      
       const { rows } = await pool.query(
         `UPDATE master_stores 
          SET name = $1, shop_domain = $2, access_token = $3, spreadsheet_id = $4, service_account_json = $5, sheet_name = $6, sku_col = $7, price_col = $8, compare_at_price_col = $9, inventory_col = $10, field_mappings = $11, metafield_mappings = $12, updated_at = NOW()
          WHERE id = $13 RETURNING *`,
-        [name || "Unlabeled Store", shopDomain, accessToken, spreadsheetId, finalServiceAccountJson, sheetName || "Sheet1", skuCol || "SKU", priceCol || "Price", compareAtPriceCol || "Compare At Price", inventoryCol || "Inventory", JSON.stringify(fieldMappings || {}), JSON.stringify(metafieldMappings || []), id]
+        [
+          name || "Unlabeled Store", 
+          finalShopDomain, 
+          finalAccessToken, 
+          finalSpreadsheetId, 
+          finalServiceAccountJson, 
+          finalSheetName, 
+          finalSkuCol, 
+          finalPriceCol, 
+          finalCompareAtPriceCol, 
+          finalInventoryCol, 
+          JSON.stringify(finalFieldMappings), 
+          JSON.stringify(finalMetafieldMappings), 
+          id
+        ]
       );
+      
       if (rows.length === 0) return res.status(404).json({ error: "Store not found" });
+      
+      console.log("[UPDATE STORE] Success! Updated store:", rows[0].id);
       res.json(normalizeStore(rows[0]));
     } catch (e: any) {
-      console.error("Update store error:", e);
+      console.error("[UPDATE STORE] Error:", e);
       res.status(400).json({ error: e.message || "Store update failed or domain conflict" });
     }
   });
