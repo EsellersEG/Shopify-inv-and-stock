@@ -2198,81 +2198,44 @@ async function startServer() {
         }
 
         // ──────────────────────────────────────────────────────────────────────
-        // INDIVIDUAL MUTATIONS for price/stock/variants/images (or fallback)
+        // TURBO BATCH for price/stock/metafields (used in ALL sync modes)
+        // Replaces the old sequential loops with parallel batching
         // ──────────────────────────────────────────────────────────────────────
-
-        for (let i = 0; i < nonCreateUpdates.length; i += 50) {
-          if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
-          const batch = nonCreateUpdates.slice(i, i + 50);
-          const priceBatch = batch.filter((u: any) => u.type === "price");
-          const invBatch = batch.filter((u: any) => u.type === "inv");
-
-          if (priceBatch.length > 0) {
-            // Group by productId for productVariantsBulkUpdate
-            const byProduct: Record<string, any[]> = {};
-            priceBatch.forEach((u: any) => {
-              if (!byProduct[u.productId]) byProduct[u.productId] = [];
-              byProduct[u.productId].push(u);
-            });
-
-            const productIds = Object.keys(byProduct);
-            let mutation = `mutation {`;
-            productIds.forEach((productId, pIdx) => {
-              const variants = byProduct[productId];
-              const variantInputs = variants.map((u: any) => {
-                const fields: string[] = [`id: "${u.id}"`];
-                if (u.priceChanged) fields.push(`price: "${u.price}"`);
-                if (u.compareAtPriceChanged) {
-                  if (u.compareAtPrice === null || u.compareAtPrice === "") {
-                    fields.push(`compareAtPrice: null`);
-                  } else {
-                    fields.push(`compareAtPrice: "${u.compareAtPrice}"`);
-                  }
-                }
-                return `{${fields.join(", ")}}`;
-              }).join(", ");
-              mutation += ` p${pIdx}: productVariantsBulkUpdate(productId: "${productId}", variants: [${variantInputs}]) { productVariants { id sku price compareAtPrice } userErrors { field message } }`;
-            });
-            mutation += ` }`;
-
-            console.log(`[SYNC] Price mutation: ${productIds.length} products, ${priceBatch.length} variants`);
-            const result = await shopifyGraphQL(shopDomain, accessToken, mutation);
-            if (result.errors) {
-              const msg = `GraphQL Price Error: ${result.errors[0]?.message || JSON.stringify(result.errors)}`;
-              console.error(`[SYNC] ${msg}`);
-              logs.push(msg);
-            }
-            Object.keys(result.data || {}).forEach(key => {
-              const errors = result.data[key]?.userErrors;
-              if (errors?.length > 0) {
-                const pIdx = parseInt(key.slice(1));
-                const pid = productIds[pIdx];
-                const skus = byProduct[pid]?.map((v: any) => v.sku).join(', ');
-                const msg = `Price Error (${skus}): ${errors[0].message}`;
-                console.error(`[SYNC] ${msg}`);
-                logs.push(msg);
-              }
-            });
+        const turboPriceUpdates2 = nonCreateUpdates.filter((u: any) => u.type === "price").map((u: any) => ({
+          sku: u.sku, variantId: u.id, productId: u.productId, price: u.price, compareAtPrice: u.compareAtPrice, priceChanged: u.priceChanged, compareAtPriceChanged: u.compareAtPriceChanged
+        }));
+        const turboStockUpdates2 = nonCreateUpdates.filter((u: any) => u.type === "inv").map((u: any) => ({
+          sku: u.sku, invId: u.id, value: u.value
+        }));
+        const turboMetaUpdates2: Array<{ productId: string; metafields: Array<{ namespace: string; key: string; type: string; value: string }> }> = [];
+        for (const [productId, upd] of Object.entries(productUpdates)) {
+          if (upd.metafields && upd.metafields.length > 0) {
+            turboMetaUpdates2.push({ productId, metafields: upd.metafields });
           }
+        }
 
-          if (invBatch.length > 0) {
-            const mutation = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { message } } }`;
-            const variables = { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities: invBatch.map((u: any) => ({ inventoryItemId: u.id, locationId: `gid://shopify/Location/${locationId}`, quantity: u.value })) } };
-            const result = await shopifyGraphQL(shopDomain, accessToken, mutation, variables);
-            if (result.errors) {
-              const msg = `GraphQL Inventory Error: ${result.errors[0]?.message || JSON.stringify(result.errors)}`;
-              console.error(`[SYNC] ${msg}`);
-              logs.push(msg);
+        if (turboPriceUpdates2.length > 0 || turboStockUpdates2.length > 0 || turboMetaUpdates2.length > 0) {
+          const turboTotal2 = turboPriceUpdates2.length + turboStockUpdates2.length + turboMetaUpdates2.length;
+          console.log(`[SYNC] ⚡ TURBO price/stock/meta: ${turboPriceUpdates2.length} price, ${turboStockUpdates2.length} stock, ${turboMetaUpdates2.length} meta products`);
+          await updateSyncSession(shopDomain, { type: "progress", current: 0, total: turboTotal2, message: `⚡ Turbo: syncing ${turboTotal2} price/stock/meta updates in parallel...` });
+
+          const turboResult2 = await turboSyncPriceStockMeta(
+            shopDomain, accessToken, locationId!,
+            turboPriceUpdates2, turboStockUpdates2, turboMetaUpdates2,
+            metafieldDefMap,
+            (phase, current, total) => {
+              updateSyncSession(shopDomain, { type: "progress", current, total, message: `⚡ ${phase}: ${current}/${total}` }).catch(() => {});
             }
-            const errors = result.data?.inventorySetQuantities?.userErrors;
-            if (errors?.length > 0) {
-              const msg = `Inventory Error: ${errors[0].message}`;
-              console.error(`[SYNC] ${msg}`);
-              logs.push(msg);
-            }
+          );
+
+          turboResult2.logs.forEach(l => logs.push(l));
+          bulkSuccessCount += turboResult2.priceOk + turboResult2.stockOk + turboResult2.metaOk;
+          console.log(`[SYNC] ⚡ TURBO price/stock/meta done: price=${turboResult2.priceOk}/${turboResult2.priceErr}, stock=${turboResult2.stockOk}/${turboResult2.stockErr}, meta=${turboResult2.metaOk}/${turboResult2.metaErr}`);
+          
+          // Clear metafields from productUpdates so they're not processed again in the product fields loop
+          for (const [productId] of Object.entries(productUpdates)) {
+            if (productUpdates[productId]) delete productUpdates[productId].metafields;
           }
-
-          await updateSyncSession(shopDomain, { type: "progress", current: Math.min(i + 50, nonCreateUpdates.length), total: nonCreateUpdates.length, message: `Step 3/6: Syncing prices & stock (${Math.min(i + 50, nonCreateUpdates.length)}/${nonCreateUpdates.length})...` });
         }
 
         // ── Step 3: Product-level updates (ALL fields: title, description, vendor, etc.) ──
@@ -2318,49 +2281,7 @@ async function startServer() {
             });
           }
 
-          // Metafields via metafieldsSet
-          for (const [productId, upd] of chunk) {
-            if (!upd.metafields || upd.metafields.length === 0) continue;
-            
-            const metafieldsInput = upd.metafields.map(mf => {
-              const defKey = `${mf.namespace}.${mf.key}`;
-              const resolvedType = metafieldDefMap.get(defKey) || mf.type;
-              return {
-                ownerId: productId,
-                namespace: mf.namespace,
-                key: mf.key,
-                type: resolvedType,
-                value: mf.value
-              };
-            });
-            
-            const mfMutation = `mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
-              metafieldsSet(metafields: $metafields) {
-                metafields { id namespace key value }
-                userErrors { field message }
-              }
-            }`;
-            
-            console.log(`[SYNC] Sending ${metafieldsInput.length} metafields for product ${productId}:`, metafieldsInput.map((m: any) => `${m.namespace}.${m.key}=${m.value} (${m.type})`).join(', '));
-            const mfResult = await shopifyGraphQL(shopDomain, accessToken, mfMutation, { metafields: metafieldsInput });
-            const mfErrs = mfResult.data?.metafieldsSet?.userErrors;
-            if (mfErrs?.length > 0) {
-              console.error(`[SYNC] Batch metafield error for ${productId}, retrying individually:`, mfErrs[0].message);
-              // Atomic failure — retry each metafield individually
-              let mfOk = 0;
-              for (const singleMf of metafieldsInput) {
-                const singleResult = await shopifyGraphQL(shopDomain, accessToken, mfMutation, { metafields: [singleMf] });
-                const singleErrs = singleResult.data?.metafieldsSet?.userErrors;
-                if (singleErrs?.length > 0) {
-                  console.error(`[SYNC] Metafield ${singleMf.namespace}.${singleMf.key} FAILED: ${singleErrs[0].message}`);
-                  logs.push(`Metafield Error (${productId}) ${singleMf.namespace}.${singleMf.key}: ${singleErrs[0].message}`);
-                } else { mfOk++; }
-              }
-              console.log(`[SYNC] Metafields for ${productId}: ${mfOk}/${metafieldsInput.length} set individually`);
-            } else {
-              console.log(`[SYNC] Metafields set for product ${productId}: ${upd.metafields.length} fields`);
-            }
-          }
+          // Metafields already handled by turbo batch above — skip
 
           // Images via productCreateMedia (only if shouldSyncImages, supports comma-separated)
           for (const [productId, upd] of chunk) {
