@@ -690,11 +690,11 @@ async function startServer() {
       const finalAccessToken = accessToken || access_token;
       const finalSpreadsheetId = spreadsheetId || spreadsheet_id;
       const finalServiceAccountJson = serviceAccountJson || service_account_json;
-      const finalSheetName = sheetName || sheet_name || "Sheet1";
-      const finalSkuCol = skuCol || sku_col || "SKU";
-      const finalPriceCol = priceCol || price_col || "Price";
-      const finalCompareAtPriceCol = compareAtPriceCol || compare_at_price_col || "Compare At Price";
-      const finalInventoryCol = inventoryCol || inventory_col || "Inventory";
+      const finalSheetName = sheetName || sheet_name || "Template";
+      const finalSkuCol = skuCol || sku_col || "Variant SKU";
+      const finalPriceCol = priceCol || price_col || "Variant Price";
+      const finalCompareAtPriceCol = compareAtPriceCol || compare_at_price_col || "Variant Compare At Price";
+      const finalInventoryCol = inventoryCol || inventory_col || "Variant Inventory Qty";
       const finalFieldMappings = fieldMappings || field_mappings || {};
       const finalMetafieldMappings = metafieldMappings || metafield_mappings || [];
       
@@ -771,11 +771,11 @@ async function startServer() {
       const finalShopDomain = shopDomain || shop_domain;
       const finalAccessToken = accessToken || access_token;
       const finalSpreadsheetId = spreadsheetId || spreadsheet_id;
-      const finalSheetName = sheetName || sheet_name || "Sheet1";
-      const finalSkuCol = skuCol || sku_col || "SKU";
-      const finalPriceCol = priceCol || price_col || "Price";
-      const finalCompareAtPriceCol = compareAtPriceCol || compare_at_price_col || "Compare At Price";
-      const finalInventoryCol = inventoryCol || inventory_col || "Inventory";
+      const finalSheetName = sheetName || sheet_name || "Template";
+      const finalSkuCol = skuCol || sku_col || "Variant SKU";
+      const finalPriceCol = priceCol || price_col || "Variant Price";
+      const finalCompareAtPriceCol = compareAtPriceCol || compare_at_price_col || "Variant Compare At Price";
+      const finalInventoryCol = inventoryCol || inventory_col || "Variant Inventory Qty";
       const finalFieldMappings = fieldMappings || field_mappings || {};
       const finalMetafieldMappings = metafieldMappings || metafield_mappings || [];
       
