@@ -29,22 +29,48 @@ export default function SyncTool() {
   const [inventoryCol, setInventoryCol] = useState("Variant Inventory Qty");
 
   const [syncStatus, setSyncStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [syncPreset, setSyncPreset] = useState<"all" | "all-no-images" | null>("all");
+  const [syncPreset, setSyncPreset] = useState<"all" | "all-no-images" | "price-stock-meta" | null>("all");
   const [customFields, setCustomFields] = useState<Set<string>>(new Set());
   const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0 });
   const [syncMessage, setSyncMessage] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const [syncResult, setSyncResult] = useState<{ updated: number; errors: number; duration?: number } | null>(null);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const syncStartRef = useRef<number>(0);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const [currentView, setCurrentView] = useState<"sync" | "mapping" | "rules" | "history" | "validation">("sync");
   const [storeChosen, setStoreChosen] = useState(false);
 
+  const startTimer = () => {
+    syncStartRef.current = Date.now();
+    setElapsedMs(0);
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      setElapsedMs(Date.now() - syncStartRef.current);
+    }, 100);
+  };
+
+  const stopTimer = () => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (syncStartRef.current) setElapsedMs(Date.now() - syncStartRef.current);
+  };
+
+  const formatTime = (ms: number) => {
+    const totalSec = Math.floor(ms / 1000);
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    const tenths = Math.floor((ms % 1000) / 100);
+    return mins > 0 ? `${mins}m ${secs}.${tenths}s` : `${secs}.${tenths}s`;
+  };
+
   useEffect(() => {
     fetchMyStores();
     return () => {
       if (eventSourceRef.current) eventSourceRef.current.close();
+      if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
 
@@ -112,10 +138,12 @@ export default function SyncTool() {
           setSyncMessage(data.duration ? `Success! Processed in ${(data.duration / 1000).toFixed(1)}s` : "Sync Complete");
           // Auto-refresh history when sync completes
           setHistoryRefreshKey(prev => prev + 1);
+          stopTimer();
         } else if (data.type === 'error') {
           setSyncStatus("error");
           setLogs([data.message]);
           setSyncMessage("Critical Error occurred.");
+          stopTimer();
         }
       } catch (e) {
         console.error("Stream parse error", e);
@@ -170,11 +198,21 @@ export default function SyncTool() {
     setSyncResult(null);
     setSyncProgress({ current: 0, total: 0 });
     setSyncMessage("Requesting server to start background sync...");
+    startTimer();
     
     try {
       const token = localStorage.getItem('token');
-      const computedMode = syncPreset ?? "custom";
-      const computedFields = syncPreset ? [] : Array.from(customFields);
+      let computedMode: string;
+      let computedFields: string[] = [];
+      if (syncPreset === "price-stock-meta") {
+        computedMode = "custom";
+        computedFields = ["price", "stock", "metafields"];
+      } else if (syncPreset) {
+        computedMode = syncPreset;
+      } else {
+        computedMode = "custom";
+        computedFields = Array.from(customFields);
+      }
       const res = await fetch("/api/sync/sheets-to-shopify", {
         method: "POST",
         headers: { 
@@ -203,6 +241,7 @@ export default function SyncTool() {
         setSyncStatus("error");
         setSyncMessage(data.error || "Operation failed to start.");
         setLogs([data.error || "Check if another sync is already running."]);
+        stopTimer();
       } else {
         // SSE will take over and update the UI
         setSyncMessage("Sync triggered. Monitoring process...");
@@ -211,6 +250,7 @@ export default function SyncTool() {
       setSyncStatus("error");
       setLogs([e.message || "Network error"]);
       setSyncMessage("Sync operation failed.");
+      stopTimer();
     }
   };
 
@@ -393,10 +433,11 @@ export default function SyncTool() {
           {/* Sync Mode Selector */}
           <div className="w-full max-w-2xl mb-12 space-y-5">
             {/* Presets */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               {[
-                { id: "all",           label: "Sync All",             desc: "Complete product data" },
-                { id: "all-no-images", label: "Sync All (No Images)",  desc: "Faster — skips images" },
+                { id: "all",              label: "Sync All",             desc: "Complete product data" },
+                { id: "all-no-images",    label: "Sync All (No Images)",  desc: "Faster — skips images" },
+                { id: "price-stock-meta", label: "Price + Stock + Meta",  desc: "Price, inventory & metafields" },
               ].map((preset) => (
                 <button
                   key={preset.id}
@@ -519,6 +560,31 @@ export default function SyncTool() {
                   <p className="text-gray-400 font-black uppercase text-[10px] tracking-[0.2em]">Blocked items</p>
                 </div>
              </motion.div>
+          )}
+
+          {/* Timer */}
+          {(syncStatus === "loading" || syncResult) && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="w-full max-w-xl mt-8"
+            >
+              <div className={`flex items-center justify-center gap-3 py-5 rounded-2xl border ${
+                syncStatus === "loading"
+                  ? "bg-orange-50 border-orange-200"
+                  : syncResult && syncResult.errors === 0
+                    ? "bg-emerald-50 border-emerald-200"
+                    : "bg-gray-50 border-gray-200"
+              }`}>
+                <Clock className={`w-5 h-5 ${
+                  syncStatus === "loading" ? "text-[#FFA500] animate-pulse" : "text-gray-500"
+                }`} />
+                <span className="font-black text-2xl tracking-tight italic text-black">{formatTime(elapsedMs)}</span>
+                <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                  {syncStatus === "loading" ? "Elapsed" : "Total Time"}
+                </span>
+              </div>
+            </motion.div>
           )}
 
           {logs.length > 0 && (

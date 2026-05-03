@@ -1119,7 +1119,7 @@ async function startServer() {
         const shouldSyncProductFields = isFullSync; // Title, Description, Vendor, Product Type, Handle
         const shouldSyncVariantFields = isFullSync; // Barcode, Taxable, Options
         const shouldSyncInventoryFields = isFullSync; // Weight, Requires Shipping
-        const shouldSyncMetafields = isFullSync && metafieldMappings.length > 0;
+        const shouldSyncMetafields = (isFullSync || (syncFields as string[]).includes("metafields")) && metafieldMappings.length > 0;
 
         // ── ALL field column indexes (from stored field_mappings) ──
         // Product-level fields
