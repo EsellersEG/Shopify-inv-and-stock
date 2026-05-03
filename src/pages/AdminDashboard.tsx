@@ -19,11 +19,11 @@ export default function AdminDashboard() {
     accessToken: '',
     spreadsheetId: '',
     serviceAccountJson: '',
-    sheetName: 'Sheet1',
-    skuCol: 'SKU',
-    priceCol: 'Price',
-    compareAtPriceCol: 'Compare At Price',
-    inventoryCol: 'Inventory',
+    sheetName: 'Template',
+    skuCol: 'Variant SKU',
+    priceCol: 'Variant Price',
+    compareAtPriceCol: 'Variant Compare At Price',
+    inventoryCol: 'Variant Inventory Qty',
     fieldMappings: {} as Record<string, string>,
     metafieldMappings: [] as any[],
   });
@@ -76,7 +76,7 @@ export default function AdminDashboard() {
         setShowAddMasterStore(false);
         setEditingStoreId(null);
         setSaveError(null);
-        setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Sheet1', skuCol: 'SKU', priceCol: 'Price', compareAtPriceCol: 'Compare At Price', inventoryCol: 'Inventory', fieldMappings: {}, metafieldMappings: [] });
+        setNewMasterStore({ name: '', shopDomain: '', accessToken: '', spreadsheetId: '', serviceAccountJson: '', sheetName: 'Template', skuCol: 'Variant SKU', priceCol: 'Variant Price', compareAtPriceCol: 'Variant Compare At Price', inventoryCol: 'Variant Inventory Qty', fieldMappings: {}, metafieldMappings: [] });
         fetchData();
       } else {
         setSaveError('Unexpected response from server. Please try again.');
@@ -91,21 +91,24 @@ export default function AdminDashboard() {
 
   const handleEditStore = (store: any) => {
     setEditingStoreId(store.id);
+    // Backend normalizeStore returns camelCase keys with already-parsed objects
+    const rawFm = store.fieldMappings || store.field_mappings;
+    const rawMfm = store.metafieldMappings || store.metafield_mappings;
     let fm = {};
     let mfm: any[] = [];
-    try { fm = JSON.parse(store.field_mappings || '{}'); } catch {}
-    try { mfm = JSON.parse(store.metafield_mappings || '[]'); } catch {}
+    try { fm = typeof rawFm === 'string' ? JSON.parse(rawFm || '{}') : (rawFm || {}); } catch {}
+    try { mfm = typeof rawMfm === 'string' ? JSON.parse(rawMfm || '[]') : (Array.isArray(rawMfm) ? rawMfm : []); } catch {}
     setNewMasterStore({
       name: store.name || '',
-      shopDomain: store.shopDomain || store.shop_domain,
-      accessToken: store.accessToken || store.access_token,
-      spreadsheetId: store.spreadsheetId || store.spreadsheet_id,
-      serviceAccountJson: store.serviceAccountJson || store.service_account_json,
-      sheetName: store.sheet_name || 'Sheet1',
-      skuCol: store.sku_col || 'SKU',
-      priceCol: store.price_col || 'Price',
-      compareAtPriceCol: store.compare_at_price_col || 'Compare At Price',
-      inventoryCol: store.inventory_col || 'Inventory',
+      shopDomain: store.shopDomain || store.shop_domain || '',
+      accessToken: store.accessToken || store.access_token || '',
+      spreadsheetId: store.spreadsheetId || store.spreadsheet_id || '',
+      serviceAccountJson: store.serviceAccountJson || store.service_account_json || '',
+      sheetName: store.sheetName || store.sheet_name || 'Template',
+      skuCol: store.skuCol || store.sku_col || 'Variant SKU',
+      priceCol: store.priceCol || store.price_col || 'Variant Price',
+      compareAtPriceCol: store.compareAtPriceCol || store.compare_at_price_col || 'Variant Compare At Price',
+      inventoryCol: store.inventoryCol || store.inventory_col || 'Variant Inventory Qty',
       fieldMappings: fm,
       metafieldMappings: mfm,
     });
