@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api } from "../../lib/api";
+import { normalizeStore } from "../../lib/normalizeStore";
 import { Settings, RefreshCw, Database, CheckCircle2, AlertCircle, Play, Save, LayoutGrid, Store, X, MapPin, Filter, Clock, ClipboardCheck } from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -20,12 +21,12 @@ export default function SyncTool() {
   const [accessToken, setAccessToken] = useState("");
   const [spreadsheetId, setSpreadsheetId] = useState("");
   const [serviceAccountJson, setServiceAccountJson] = useState("");
-  const [sheetName, setSheetName] = useState("Sheet1");
+  const [sheetName, setSheetName] = useState("Template");
 
-  const [skuCol, setSkuCol] = useState("SKU");
-  const [priceCol, setPriceCol] = useState("Price");
-  const [compareAtPriceCol, setCompareAtPriceCol] = useState("Compare At Price");
-  const [inventoryCol, setInventoryCol] = useState("Inventory");
+  const [skuCol, setSkuCol] = useState("Variant SKU");
+  const [priceCol, setPriceCol] = useState("Variant Price");
+  const [compareAtPriceCol, setCompareAtPriceCol] = useState("Variant Compare At Price");
+  const [inventoryCol, setInventoryCol] = useState("Variant Inventory Qty");
 
   const [syncStatus, setSyncStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [syncPreset, setSyncPreset] = useState<"all" | "all-no-images" | null>("all");
@@ -148,18 +149,19 @@ export default function SyncTool() {
     }
   };
 
-  const applyStore = (store: any) => {
-    setSelectedStoreId(store.id);
-    setStoreName(store.name || "");
-    setShopDomain(store.shopDomain || store.shop_domain);
-    setAccessToken(store.accessToken || store.access_token);
-    setSpreadsheetId(store.spreadsheetId || store.spreadsheet_id);
-    setServiceAccountJson(store.serviceAccountJson || store.service_account_json);
-    setSheetName(store.sheet_name || store.sheetName || "Sheet1");
-    setSkuCol(store.sku_col || store.skuCol || "SKU");
-    setPriceCol(store.price_col || store.priceCol || "Price");
-    setCompareAtPriceCol(store.compare_at_price_col || store.compareAtPriceCol || "Compare At Price");
-    setInventoryCol(store.inventory_col || store.inventoryCol || "Inventory");
+  const applyStore = (raw: any) => {
+    const s = normalizeStore(raw);
+    setSelectedStoreId(s.id);
+    setStoreName(s.name);
+    setShopDomain(s.shopDomain);
+    setAccessToken(s.accessToken);
+    setSpreadsheetId(s.spreadsheetId);
+    setServiceAccountJson(s.serviceAccountJson);
+    setSheetName(s.sheetName);
+    setSkuCol(s.skuCol);
+    setPriceCol(s.priceCol);
+    setCompareAtPriceCol(s.compareAtPriceCol);
+    setInventoryCol(s.inventoryCol);
   };
 
   const handleSync = async () => {

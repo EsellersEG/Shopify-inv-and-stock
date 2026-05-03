@@ -47,11 +47,11 @@ async function initDatabase() {
       access_token TEXT NOT NULL,
       spreadsheet_id TEXT NOT NULL,
       service_account_json TEXT NOT NULL,
-      sheet_name TEXT DEFAULT 'Sheet1',
-      sku_col TEXT DEFAULT 'SKU',
-      price_col TEXT DEFAULT 'Price',
-      compare_at_price_col TEXT DEFAULT 'Compare At Price',
-      inventory_col TEXT DEFAULT 'Inventory',
+      sheet_name TEXT DEFAULT 'Template',
+      sku_col TEXT DEFAULT 'Variant SKU',
+      price_col TEXT DEFAULT 'Variant Price',
+      compare_at_price_col TEXT DEFAULT 'Variant Compare At Price',
+      inventory_col TEXT DEFAULT 'Variant Inventory Qty',
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -105,11 +105,11 @@ async function initDatabase() {
     ["name",                 "TEXT NOT NULL DEFAULT 'Unlabeled Store'"],
     ["spreadsheet_id",       "TEXT NOT NULL DEFAULT ''"],
     ["service_account_json", "TEXT NOT NULL DEFAULT ''"],
-    ["sheet_name",           "TEXT DEFAULT 'Sheet1'"],
-    ["sku_col",              "TEXT DEFAULT 'SKU'"],
-    ["price_col",            "TEXT DEFAULT 'Price'"],
-    ["compare_at_price_col", "TEXT DEFAULT 'Compare At Price'"],
-    ["inventory_col",        "TEXT DEFAULT 'Inventory'"],
+    ["sheet_name",           "TEXT DEFAULT 'Template'"],
+    ["sku_col",              "TEXT DEFAULT 'Variant SKU'"],
+    ["price_col",            "TEXT DEFAULT 'Variant Price'"],
+    ["compare_at_price_col", "TEXT DEFAULT 'Variant Compare At Price'"],
+    ["inventory_col",        "TEXT DEFAULT 'Variant Inventory Qty'"],
     ["field_mappings",       "TEXT DEFAULT '{}'"],
     ["metafield_mappings",   "TEXT DEFAULT '[]'"],
   ];
@@ -119,6 +119,18 @@ async function initDatabase() {
     } catch (e) {
       console.error(`Migration for ${col} failed:`, e);
     }
+  }
+
+  // Backfill legacy default values for existing stores
+  try {
+    await pool.query(`UPDATE master_stores SET sheet_name = 'Template' WHERE sheet_name = 'Sheet1'`);
+    await pool.query(`UPDATE master_stores SET sku_col = 'Variant SKU' WHERE sku_col = 'SKU'`);
+    await pool.query(`UPDATE master_stores SET price_col = 'Variant Price' WHERE price_col = 'Price'`);
+    await pool.query(`UPDATE master_stores SET compare_at_price_col = 'Variant Compare At Price' WHERE compare_at_price_col = 'Compare At Price'`);
+    await pool.query(`UPDATE master_stores SET inventory_col = 'Variant Inventory Qty' WHERE inventory_col = 'Inventory'`);
+    console.log("Legacy default values backfilled.");
+  } catch (e) {
+    console.error("Backfill failed (non-fatal):", e);
   }
 
   console.log("Database tables ready.");
@@ -953,7 +965,7 @@ async function startServer() {
       const credentials = JSON.parse(store.serviceAccountJson);
       const auth = new google.auth.GoogleAuth({ credentials, scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"] });
       const sheets = google.sheets({ version: "v4", auth });
-      const sheetRes = await sheets.spreadsheets.values.get({ spreadsheetId: store.spreadsheetId, range: `${store.sheet_name || "Sheet1"}!1:2` });
+      const sheetRes = await sheets.spreadsheets.values.get({ spreadsheetId: store.spreadsheetId, range: `${store.sheetName || "Template"}!1:2` });
       const sheetRows = sheetRes.data.values;
       if (!sheetRows || sheetRows.length === 0) return res.json({ headers: [], preview: {} });
 
@@ -2290,7 +2302,7 @@ async function startServer() {
       const credentials = JSON.parse(store.serviceAccountJson);
       const auth = new google.auth.GoogleAuth({ credentials, scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"] });
       const sheets = google.sheets({ version: "v4", auth });
-      const sheetRes = await sheets.spreadsheets.values.get({ spreadsheetId: store.spreadsheetId, range: store.sheet_name || "Sheet1" });
+      const sheetRes = await sheets.spreadsheets.values.get({ spreadsheetId: store.spreadsheetId, range: store.sheetName || "Template" });
       const sheetRows = sheetRes.data.values;
       if (!sheetRows || sheetRows.length < 2) return res.json({ total: 0, passing: 0 });
       const headers = (sheetRows[0] || []).map((h: any) => String(h || "").trim());

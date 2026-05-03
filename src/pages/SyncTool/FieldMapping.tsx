@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../lib/api";
+import { normalizeStore } from "../../lib/normalizeStore";
 import { Save, ChevronDown, ChevronUp, Plus, Trash2, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 
 // ── Field definitions matching Shopify import/export format ──
@@ -118,21 +119,22 @@ export default function FieldMapping({
         headers: { Authorization: `Bearer ${token}` },
       });
       const stores = await storeRes.json();
-      const store = Array.isArray(stores) ? stores.find((s: any) => s.id === storeId) : null;
+      const rawStore = Array.isArray(stores) ? stores.find((s: any) => s.id === storeId) : null;
+      const store = rawStore ? normalizeStore(rawStore) : null;
 
       if (store) {
         let existingMappings: Record<string, string> = {};
-        try {
-          existingMappings = JSON.parse(store.field_mappings || "{}");
-        } catch {}
+        if (typeof store.fieldMappings === 'object' && Object.keys(store.fieldMappings).length > 0) {
+          existingMappings = store.fieldMappings;
+        }
 
         // Seed from legacy columns if no field_mappings exist
         if (Object.keys(existingMappings).length === 0) {
           existingMappings = {
-            variant_sku: store.sku_col || skuCol || "SKU",
-            variant_price: store.price_col || priceCol || "Price",
-            variant_compare_at_price: store.compare_at_price_col || compareAtPriceCol || "",
-            variant_inventory_qty: store.inventory_col || inventoryCol || "Inventory",
+            variant_sku: store.skuCol || skuCol || "Variant SKU",
+            variant_price: store.priceCol || priceCol || "Variant Price",
+            variant_compare_at_price: store.compareAtPriceCol || compareAtPriceCol || "",
+            variant_inventory_qty: store.inventoryCol || inventoryCol || "Variant Inventory Qty",
           };
           // Auto-detect other fields from headers
           const headerLower = data.headers?.map((h: string) => h.toLowerCase()) || [];
@@ -175,11 +177,7 @@ export default function FieldMapping({
 
         setMappings(existingMappings);
 
-        let existingMetafields: MetafieldMapping[] = [];
-        try {
-          existingMetafields = JSON.parse(store.metafield_mappings || "[]");
-        } catch {}
-        setMetafields(existingMetafields);
+        setMetafields(Array.isArray(store.metafieldMappings) ? store.metafieldMappings : []);
       }
     } catch (e) {
       console.error("Failed to load field mapping data:", e);
@@ -211,7 +209,8 @@ export default function FieldMapping({
         headers: { Authorization: `Bearer ${token}` },
       });
       const stores = await storeRes.json();
-      const store = Array.isArray(stores) ? stores.find((s: any) => s.id === storeId) : null;
+      const rawStore = Array.isArray(stores) ? stores.find((s: any) => s.id === storeId) : null;
+      const store = rawStore ? normalizeStore(rawStore) : null;
       
       if (!store) {
         console.error("Store not found for saving");
@@ -224,18 +223,18 @@ export default function FieldMapping({
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           name: store.name,
-          shopDomain: store.shopDomain || store.shop_domain,
-          accessToken: store.accessToken || store.access_token,
-          spreadsheetId: store.spreadsheetId || store.spreadsheet_id,
+          shopDomain: store.shopDomain,
+          accessToken: store.accessToken,
+          spreadsheetId: store.spreadsheetId,
           serviceAccountJson: "", // keep existing (server preserves when blank)
-          sheetName: store.sheet_name || store.sheetName,
+          sheetName: store.sheetName,
           fieldMappings: mappings,
           metafieldMappings: metafields,
           // Keep legacy columns in sync
-          skuCol: mappings.variant_sku || store.sku_col || skuCol,
-          priceCol: mappings.variant_price || store.price_col || priceCol,
-          compareAtPriceCol: mappings.variant_compare_at_price || store.compare_at_price_col || compareAtPriceCol,
-          inventoryCol: mappings.variant_inventory_qty || store.inventory_col || inventoryCol,
+          skuCol: mappings.variant_sku || store.skuCol,
+          priceCol: mappings.variant_price || store.priceCol,
+          compareAtPriceCol: mappings.variant_compare_at_price || store.compareAtPriceCol,
+          inventoryCol: mappings.variant_inventory_qty || store.inventoryCol,
         }),
       });
       if (!res.ok) {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../lib/api';
+import { normalizeStore } from '../lib/normalizeStore';
 import { Plus, Users, Store, Key, ChevronRight, Mail, UserPlus, Info, Database, ShieldCheck, Globe, FileJson, Edit2, Trash2, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -89,28 +90,22 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleEditStore = (store: any) => {
+  const handleEditStore = (raw: any) => {
+    const store = normalizeStore(raw);
     setEditingStoreId(store.id);
-    // Backend normalizeStore returns camelCase keys with already-parsed objects
-    const rawFm = store.fieldMappings || store.field_mappings;
-    const rawMfm = store.metafieldMappings || store.metafield_mappings;
-    let fm = {};
-    let mfm: any[] = [];
-    try { fm = typeof rawFm === 'string' ? JSON.parse(rawFm || '{}') : (rawFm || {}); } catch {}
-    try { mfm = typeof rawMfm === 'string' ? JSON.parse(rawMfm || '[]') : (Array.isArray(rawMfm) ? rawMfm : []); } catch {}
     setNewMasterStore({
-      name: store.name || '',
-      shopDomain: store.shopDomain || store.shop_domain || '',
-      accessToken: store.accessToken || store.access_token || '',
-      spreadsheetId: store.spreadsheetId || store.spreadsheet_id || '',
-      serviceAccountJson: store.serviceAccountJson || store.service_account_json || '',
-      sheetName: store.sheetName || store.sheet_name || 'Template',
-      skuCol: store.skuCol || store.sku_col || 'Variant SKU',
-      priceCol: store.priceCol || store.price_col || 'Variant Price',
-      compareAtPriceCol: store.compareAtPriceCol || store.compare_at_price_col || 'Variant Compare At Price',
-      inventoryCol: store.inventoryCol || store.inventory_col || 'Variant Inventory Qty',
-      fieldMappings: fm,
-      metafieldMappings: mfm,
+      name: store.name,
+      shopDomain: store.shopDomain,
+      accessToken: store.accessToken,
+      spreadsheetId: store.spreadsheetId,
+      serviceAccountJson: store.serviceAccountJson,
+      sheetName: store.sheetName,
+      skuCol: store.skuCol,
+      priceCol: store.priceCol,
+      compareAtPriceCol: store.compareAtPriceCol,
+      inventoryCol: store.inventoryCol,
+      fieldMappings: store.fieldMappings,
+      metafieldMappings: store.metafieldMappings,
     });
     setShowAddMasterStore(true);
   };
