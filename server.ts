@@ -2595,6 +2595,7 @@ async function startServer() {
     }
   });
 
+  app.get('/api/public-debug', async (req, res) => { try { const logs = await pool.query('SELECT * FROM sync_logs ORDER BY created_at DESC LIMIT 10'); const ms = await pool.query('SELECT id, shop_domain, name FROM master_stores'); res.json({ logs: logs.rows, stores: ms.rows }); } catch(e: any) { res.status(500).json({ error: e.message || String(e) }); } });
   if (process.env.NODE_ENV !== "production") {
     const { createServer } = await import("vite");
     const vite = await createServer({ server: { middlewareMode: true }, appType: "spa" });
