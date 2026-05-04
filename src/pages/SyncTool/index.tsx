@@ -101,15 +101,27 @@ export default function SyncTool() {
         setSyncStatus("loading");
         setSyncProgress(data.progress || { current: 0, total: 0 });
         setSyncMessage(data.message || "Syncing in background...");
+        // Restore timer from server elapsed time
+        if (data.elapsedMs && !timerRef.current) {
+          syncStartRef.current = Date.now() - data.elapsedMs;
+          setElapsedMs(data.elapsedMs);
+          timerRef.current = setInterval(() => {
+            setElapsedMs(Date.now() - syncStartRef.current);
+          }, 100);
+        }
       } else if (data.status === 'success') {
         setSyncStatus("success");
         setSyncResult(data.result);
         setLogs(data.logs || []);
         setSyncMessage(data.message || "Sync Complete");
+        // Restore final elapsed time
+        if (data.result?.duration) setElapsedMs(data.result.duration);
+        stopTimer();
       } else if (data.status === 'error') {
         setSyncStatus("error");
         setLogs(data.logs || []);
-        setSyncMessage("Error occurred.");
+        setSyncMessage(data.message || "Error occurred.");
+        stopTimer();
       }
     } catch (e) {
       console.error("Failed to check sync status", e);
@@ -258,6 +270,11 @@ export default function SyncTool() {
     try {
       const token = localStorage.getItem('token');
       await api.post("/api/sync/cancel", { shopDomain });
+      // Immediately update UI
+      setSyncStatus("error");
+      setSyncMessage("Sync cancelled by user");
+      stopTimer();
+      setHistoryRefreshKey(prev => prev + 1);
     } catch (e) {
       console.error("Failed to cancel", e);
     }

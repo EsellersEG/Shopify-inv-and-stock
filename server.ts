@@ -170,6 +170,16 @@ async function initDatabase() {
   // Add missing columns to filter_rules
   try { await pool.query("ALTER TABLE filter_rules ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"); } catch {}
   try { await pool.query("ALTER TABLE filter_rules ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()"); } catch {}
+
+  // Add missing columns to sync_logs for richer tracking
+  try { await pool.query("ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS sync_mode TEXT DEFAULT 'all'"); } catch {}
+  try { await pool.query("ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS total_count INT DEFAULT 0"); } catch {}
+  try { await pool.query("ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS created_count INT DEFAULT 0"); } catch {}
+  try { await pool.query("ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS skipped_count INT DEFAULT 0"); } catch {}
+
+  // Add missing columns to sync_results for product details
+  try { await pool.query("ALTER TABLE sync_results ADD COLUMN IF NOT EXISTS product_title TEXT DEFAULT ''"); } catch {}
+  try { await pool.query("ALTER TABLE sync_results ADD COLUMN IF NOT EXISTS shopify_product_id TEXT DEFAULT ''"); } catch {}
 }
 
 function evaluateRule(operator: string, fieldValue: string, ruleValue: string): boolean {
@@ -1216,19 +1226,22 @@ async function startServer() {
       session.message = "Sync Complete";
       try {
         const logId = data.syncLogId || randomUUID();
+        const results = data.syncResults || [];
+        const createdCount = results.filter((r: any) => r.action === 'created').length;
+        const skippedCount = results.filter((r: any) => r.status === 'filtered' || r.status === 'not_found').length;
         await pool.query(
-          "INSERT INTO sync_logs (id, shop_domain, status, message, updated_count, error_count, duration, logs) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-          [logId, shopDomain, "success", "Sync completed", data.updatedCount, data.errorCount, data.duration, data.logs || []]
+          "INSERT INTO sync_logs (id, shop_domain, status, message, updated_count, error_count, duration, logs, sync_mode, total_count, created_count, skipped_count) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+          [logId, shopDomain, "success", "Sync completed", data.updatedCount, data.errorCount, data.duration, data.logs || [], data.syncMode || 'all', results.length, createdCount, skippedCount]
         );
-        if (data.syncResults && data.syncResults.length > 0) {
-          for (let k = 0; k < data.syncResults.length; k += 100) {
-            const batch = data.syncResults.slice(k, k + 100);
+        if (results.length > 0) {
+          for (let k = 0; k < results.length; k += 100) {
+            const batch = results.slice(k, k + 100);
             const placeholders = batch.map((_: any, bi: number) => {
-              const base = bi * 8;
-              return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8})`;
+              const base = bi * 10;
+              return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10})`;
             }).join(',');
-            const values = batch.flatMap((r: any) => [randomUUID(), logId, shopDomain, r.sku, r.status, r.action, r.message || '', r.rowNumber]);
-            await pool.query(`INSERT INTO sync_results (id,sync_log_id,shop_domain,sku,status,action,message,row_number) VALUES ${placeholders}`, values);
+            const values = batch.flatMap((r: any) => [randomUUID(), logId, shopDomain, r.sku, r.status, r.action, r.message || '', r.rowNumber, r.productTitle || '', r.shopifyProductId || '']);
+            await pool.query(`INSERT INTO sync_results (id,sync_log_id,shop_domain,sku,status,action,message,row_number,product_title,shopify_product_id) VALUES ${placeholders}`, values);
           }
         }
       } catch (e) { console.error("Failed to save sync log:", e); }
@@ -1238,20 +1251,22 @@ async function startServer() {
       session.logs = data.logs || [data.message];
       try {
         const errLogId = data.syncLogId || randomUUID();
+        const results = data.syncResults || [];
+        const createdCount = results.filter((r: any) => r.action === 'created').length;
+        const skippedCount = results.filter((r: any) => r.status === 'filtered' || r.status === 'not_found').length;
         await pool.query(
-          "INSERT INTO sync_logs (id, shop_domain, status, message, updated_count, error_count, duration, logs) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-          [errLogId, shopDomain, "error", data.message, 0, 1, data.duration || 0, data.logs || [data.message]]
+          "INSERT INTO sync_logs (id, shop_domain, status, message, updated_count, error_count, duration, logs, sync_mode, total_count, created_count, skipped_count) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+          [errLogId, shopDomain, "error", data.message, 0, 1, data.duration || 0, data.logs || [data.message], data.syncMode || 'all', results.length, createdCount, skippedCount]
         );
-        // Also save any results collected before the error
-        if (data.syncResults && data.syncResults.length > 0) {
-          for (let k = 0; k < data.syncResults.length; k += 100) {
-            const batch = data.syncResults.slice(k, k + 100);
+        if (results.length > 0) {
+          for (let k = 0; k < results.length; k += 100) {
+            const batch = results.slice(k, k + 100);
             const placeholders = batch.map((_: any, bi: number) => {
-              const base = bi * 8;
-              return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8})`;
+              const base = bi * 10;
+              return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10})`;
             }).join(',');
-            const values = batch.flatMap((r: any) => [randomUUID(), errLogId, shopDomain, r.sku, r.status, r.action, r.message || '', r.rowNumber]);
-            await pool.query(`INSERT INTO sync_results (id,sync_log_id,shop_domain,sku,status,action,message,row_number) VALUES ${placeholders}`, values);
+            const values = batch.flatMap((r: any) => [randomUUID(), errLogId, shopDomain, r.sku, r.status, r.action, r.message || '', r.rowNumber, r.productTitle || '', r.shopifyProductId || '']);
+            await pool.query(`INSERT INTO sync_results (id,sync_log_id,shop_domain,sku,status,action,message,row_number,product_title,shopify_product_id) VALUES ${placeholders}`, values);
           }
         }
       } catch (dbErr) { console.error("Failed to save error sync log:", dbErr); }
@@ -1263,7 +1278,12 @@ async function startServer() {
     const { shopDomain } = req.body;
     if (syncSessions[shopDomain]) {
       syncSessions[shopDomain].cancelled = true;
-      syncSessions[shopDomain].message = "Cancelling process...";
+      syncSessions[shopDomain].status = "error";
+      syncSessions[shopDomain].message = "Sync cancelled by user";
+      // Immediately notify SSE clients so the UI updates
+      (syncSessions[shopDomain].clients || []).forEach((c: any) => {
+        try { c.res.write(`data: ${JSON.stringify({ type: "error", message: "Sync cancelled by user" })}\n\n`); } catch {}
+      });
     }
     res.json({ success: true });
   });
@@ -1272,12 +1292,12 @@ async function startServer() {
     const { shopDomain, accessToken, spreadsheetId, serviceAccountJson, mapping, sheetName, syncMode, fields: syncFields = [] } = req.body;
     if (syncSessions[shopDomain]?.status === "loading") return res.status(400).json({ error: "Sync already running" });
 
-    syncSessions[shopDomain] = { status: "loading", progress: { current: 0, total: 0 }, message: "Starting...", logs: [], clients: syncSessions[shopDomain]?.clients || [], cancelled: false };
+    syncSessions[shopDomain] = { status: "loading", progress: { current: 0, total: 0 }, message: "Starting...", logs: [], clients: syncSessions[shopDomain]?.clients || [], cancelled: false, startedAt: Date.now() };
 
     (async () => {
       const startTime = Date.now();
       const syncLogId = randomUUID();
-      const syncResultsArr: Array<{sku: string; status: string; action: string; message: string; rowNumber: number}> = [];
+      const syncResultsArr: Array<{sku: string; status: string; action: string; message: string; rowNumber: number; productTitle?: string; shopifyProductId?: string}> = [];
       const logs: string[] = [];
       try {
         await updateSyncSession(shopDomain, { type: "progress", current: 0, total: 0, message: "Step 1: Fetching Data..." });
@@ -1287,7 +1307,7 @@ async function startServer() {
         const sheets = google.sheets({ version: "v4", auth });
         const sheetRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: sheetName || "Sheet1" });
         const rows = sheetRes.data.values;
-        if (!rows || rows.length === 0) return await updateSyncSession(shopDomain, { type: "error", message: "No data found" });
+        if (!rows || rows.length === 0) return await updateSyncSession(shopDomain, { type: "error", message: "No data found", syncLogId, syncMode, duration: Date.now() - startTime });
 
         const rawHeaders = rows[0] || [];
         const headers = rawHeaders.map((h: any) => String(h || "").trim());
@@ -1299,7 +1319,7 @@ async function startServer() {
         console.log(`[SYNC] Headers Found:`, headers);
         console.log(`[SYNC] Indexes: SKU=${skuIndex}, Price=${priceIndex}, CompareAtPrice=${compareAtPriceIndex}, Inv=${invIndex}`);
 
-        if (skuIndex === -1) return await updateSyncSession(shopDomain, { type: "error", message: `SKU column "${mapping.sku}" not found in sheet` });
+        if (skuIndex === -1) return await updateSyncSession(shopDomain, { type: "error", message: `SKU column "${mapping.sku}" not found in sheet`, syncLogId, syncMode, duration: Date.now() - startTime });
 
         // Load filter rules for this store
         let filterRules: any[] = [];
@@ -1788,9 +1808,18 @@ async function startServer() {
         }
 
         // Track all SKUs queued for update
+        // Build a quick sku→row map so we can pull the product title from the sheet
+        const skuRowMap = new Map<string, number>();
+        for (let ri = 1; ri < rows.length; ri++) {
+          const s = String(rows[ri][skuIndex] || "").trim();
+          if (s && !skuRowMap.has(s)) skuRowMap.set(s, ri);
+        }
         const updatedSkus = new Set<string>(updates.filter((u: any) => u.type !== "create").map((u: any) => u.sku));
         updatedSkus.forEach(sku => {
-          syncResultsArr.push({ sku, status: "updated", action: "sync_applied", message: "", rowNumber: 0 });
+          const rowIdx = skuRowMap.get(sku) || 0;
+          const sheetTitle = titleColIdx !== -1 && rowIdx > 0 ? String(rows[rowIdx][titleColIdx] ?? "").trim() : "";
+          const shopifyData = shopifyVariants.get(sku);
+          syncResultsArr.push({ sku, status: "updated", action: "sync_applied", message: "", rowNumber: rowIdx, productTitle: sheetTitle, shopifyProductId: shopifyData?.productId || "" });
         });
 
         // ── Step 2a: Create new products (if any) ──
@@ -1861,7 +1890,7 @@ async function startServer() {
               const msg = `Create Error (${item.sku}): ${result.errors[0]?.message || JSON.stringify(result.errors)}`;
               console.error(`[SYNC] ${msg}`);
               logs.push(msg);
-              syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: result.errors[0]?.message || "Unknown error", rowNumber: item.rowNumber });
+              syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: result.errors[0]?.message || "Unknown error", rowNumber: item.rowNumber, productTitle: item.title || "" });
               createProgress++;
               await updateSyncSession(shopDomain, { type: "progress", current: createProgress, total: createBatch.length, message: `Step 2/6: Creating NEW products (${createProgress}/${createBatch.length})...` });
               return;
@@ -1872,7 +1901,7 @@ async function startServer() {
               const msg = `Create Error (${item.sku}): ${userErrors[0].message}`;
               console.error(`[SYNC] ${msg}`);
               logs.push(msg);
-              syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: userErrors[0].message, rowNumber: item.rowNumber });
+              syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: userErrors[0].message, rowNumber: item.rowNumber, productTitle: item.title || "" });
               createProgress++;
               await updateSyncSession(shopDomain, { type: "progress", current: createProgress, total: createBatch.length, message: `Step 2/6: Creating NEW products (${createProgress}/${createBatch.length})...` });
               return;
@@ -1951,7 +1980,7 @@ async function startServer() {
               
               createdCount++;
               const statusMsg = (!variantUpdateOk || !invUpdateOk) ? "Product created with partial errors" : "Product created in Shopify";
-              syncResultsArr.push({ sku: item.sku, status: "updated", action: "created", message: statusMsg, rowNumber: item.rowNumber });
+              syncResultsArr.push({ sku: item.sku, status: "updated", action: "created", message: statusMsg, rowNumber: item.rowNumber, productTitle: item.title || "", shopifyProductId: newProduct.id });
               console.log(`[SYNC] Created: ${item.sku} -> ${newProduct.id}`);
               
               // Step 3: Set inventory if we have a location and inventory value
@@ -2078,7 +2107,7 @@ async function startServer() {
 
         // nonCreateUpdates already computed above
 
-        if (nonCreateUpdates.length === 0 && Object.keys(productUpdates).length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: createdCount, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
+        if (nonCreateUpdates.length === 0 && Object.keys(productUpdates).length === 0) return await updateSyncSession(shopDomain, { type: "complete", updatedCount: createdCount, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr, syncMode });
 
         // ──────────────────────────────────────────────────────────────────────
         // TURBO PATH: Price + Stock + Metafields only → massively parallel batching
@@ -2120,7 +2149,7 @@ async function startServer() {
           const turboErrors = turboResult.priceErr + turboResult.stockErr + turboResult.metaErr + logs.filter(l => l.includes("Create Error")).length;
           console.log(`[SYNC] ⚡ TURBO COMPLETE: price=${turboResult.priceOk}ok/${turboResult.priceErr}err, stock=${turboResult.stockOk}ok/${turboResult.stockErr}err, meta=${turboResult.metaOk}ok/${turboResult.metaErr}err`);
           
-          return await updateSyncSession(shopDomain, { type: "complete", updatedCount: turboTotal, errorCount: turboErrors, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
+          return await updateSyncSession(shopDomain, { type: "complete", updatedCount: turboTotal, errorCount: turboErrors, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr, syncMode });
         }
 
         // ──────────────────────────────────────────────────────────────────────
@@ -2410,10 +2439,10 @@ async function startServer() {
 
         const totalUpdated = createdCount + bulkSuccessCount + (nonCreateUpdates.length - logs.filter(l => !l.includes("Create Error")).length) + productUpdateCount + variantUpdateCount + invItemUpdateCount;
         console.log(`[SYNC] Complete: created=${createdCount}, bulk=${bulkSuccessCount}, product fields=${productUpdateCount}, variant fields=${variantUpdateCount}, inv items=${invItemUpdateCount}`);
-        await updateSyncSession(shopDomain, { type: "complete", updatedCount: totalUpdated, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr });
+        await updateSyncSession(shopDomain, { type: "complete", updatedCount: totalUpdated, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr, syncMode });
       } catch (err: any) {
         console.error(`[SYNC] Global Error:`, err);
-        await updateSyncSession(shopDomain, { type: "error", message: err.message, syncLogId, syncResults: syncResultsArr, logs, duration: Date.now() - startTime });
+        await updateSyncSession(shopDomain, { type: "error", message: err.message, syncLogId, syncResults: syncResultsArr, logs, duration: Date.now() - startTime, syncMode });
       }
     })();
     res.json({ success: true });
@@ -2423,6 +2452,10 @@ async function startServer() {
     const session = syncSessions[req.query.shopDomain as string];
     if (!session) return res.json({ status: "idle" });
     const { clients, ...safe } = session;
+    // Include elapsed time so frontend can restore the timer
+    if (safe.status === "loading" && safe.startedAt) {
+      safe.elapsedMs = Date.now() - safe.startedAt;
+    }
     res.json(safe);
   });
 
@@ -2537,9 +2570,9 @@ async function startServer() {
         "SELECT * FROM sync_results WHERE sync_log_id = $1 ORDER BY row_number ASC",
         [logId]
       );
-      const header = "sku,status,action,message,row_number,created_at";
+      const header = "sku,product_title,status,action,message,row_number,shopify_product_id,created_at";
       const body = rows.map((r: any) =>
-        `"${r.sku}","${r.status}","${r.action}","${(r.message || '').replace(/"/g, '""')}",${r.row_number},"${r.created_at}"`
+        `"${r.sku}","${(r.product_title || '').replace(/"/g, '""')}","${r.status}","${r.action}","${(r.message || '').replace(/"/g, '""')}",${r.row_number},"${r.shopify_product_id || ''}","${r.created_at}"`
       ).join('\n');
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="sync-results-${logId}.csv"`);
