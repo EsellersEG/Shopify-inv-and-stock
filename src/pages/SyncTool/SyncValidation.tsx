@@ -79,7 +79,7 @@ export default function SyncValidation({ shopDomain }: SyncValidationProps) {
       const res = await fetch("/api/sync/history", { headers: { Authorization: `Bearer ${token()}` } });
       const data = await res.json();
       if (Array.isArray(data)) {
-        const filtered = shopDomain ? data.filter((l: SyncLog) => l.shop_domain === shopDomain) : data;
+        const filtered = shopDomain ? data.filter((l: SyncLog) => l.shop_domain.toLowerCase() === shopDomain.toLowerCase()) : data;
         setLogs(filtered);
         if (filtered.length > 0 && !selectedLogId) setSelectedLogId(filtered[0].id);
       }

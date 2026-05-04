@@ -127,7 +127,7 @@ export default function SyncHistory({ shopDomain }: SyncHistoryProps) {
       .catch((e) => console.error("CSV export failed:", e));
   }
 
-  const filteredLogs = logs.filter((log) => !shopDomain || log.shop_domain === shopDomain);
+  const filteredLogs = logs.filter((log) => !shopDomain || log.shop_domain.toLowerCase() === shopDomain.toLowerCase());
 
   if (loading) {
     return (<div className="flex items-center justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-[#FFA500]" /></div>);
