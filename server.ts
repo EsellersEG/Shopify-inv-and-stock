@@ -2601,6 +2601,15 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.join(path.resolve(), "dist")));
+    app.get('/api/public-debug', async (req, res) => {
+      try {
+        const logs = await pool.query("SELECT * FROM sync_logs ORDER BY created_at DESC LIMIT 10");
+        const ms = await pool.query("SELECT id, shop_domain, name FROM master_stores");
+        res.json({ logs: logs.rows, stores: ms.rows });
+      } catch(e: any) {
+        res.status(500).json({ error: e.message || String(e) });
+      }
+    });
     app.get("*", (req, res) => res.sendFile(path.join(path.resolve(), "dist", "index.html")));
   }
 
