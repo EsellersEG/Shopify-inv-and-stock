@@ -306,6 +306,7 @@ async function parallelBatch<T, R>(
   concurrency = 4
 ): Promise<R[]> {
   const results: R[] = [];
+  const errors: Array<{ index: number; error: any }> = [];
   let activeCount = 0;
   let currentIndex = 0;
 
@@ -324,7 +325,16 @@ async function parallelBatch<T, R>(
               runNext();
             }
           })
-          .catch(reject);
+          .catch(err => {
+            console.error(`[PARALLEL BATCH] Item ${idx} failed:`, err.message || err);
+            errors.push({ index: idx, error: err });
+            activeCount--;
+            if (currentIndex >= items.length && activeCount === 0) {
+              resolve(results); // Continue even with errors
+            } else {
+              runNext();
+            }
+          });
       }
     };
     if (items.length === 0) resolve([]);
@@ -1256,7 +1266,7 @@ async function startServer() {
         const skippedCount = results.filter((r: any) => r.status === 'filtered' || r.status === 'not_found').length;
         await pool.query(
           "INSERT INTO sync_logs (id, shop_domain, status, message, updated_count, error_count, duration, logs, sync_mode, total_count, created_count, skipped_count) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-          [errLogId, shopDomain, "error", data.message, 0, 1, data.duration || 0, data.logs || [data.message], data.syncMode || 'all', results.length, createdCount, skippedCount]
+          [errLogId, shopDomain, "error", data.message, data.updatedCount || 0, data.errorCount || 1, data.duration || 0, data.logs || [data.message], data.syncMode || 'all', results.length, createdCount, skippedCount]
         );
         if (results.length > 0) {
           for (let k = 0; k < results.length; k += 100) {
@@ -1834,7 +1844,10 @@ async function startServer() {
           // Process creates in PARALLEL batches — 5 concurrent product pipelines
           let createProgress = 0;
           await parallelBatch(createBatch, async (item, idx) => {
-            if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
+            try {
+              // Add 60-second timeout per product to prevent hanging
+              const productCreationWork = async () => {
+                if (syncSessions[shopDomain]?.cancelled) throw new Error("Sync terminated by user");
             
             // Build product input with ALL mapped fields
             const productInput: any = {
@@ -1891,8 +1904,6 @@ async function startServer() {
               console.error(`[SYNC] ${msg}`);
               logs.push(msg);
               syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: result.errors[0]?.message || "Unknown error", rowNumber: item.rowNumber, productTitle: item.title || "" });
-              createProgress++;
-              await updateSyncSession(shopDomain, { type: "progress", current: createProgress, total: createBatch.length, message: `Step 2/6: Creating NEW products (${createProgress}/${createBatch.length})...` });
               return;
             }
             
@@ -1902,8 +1913,6 @@ async function startServer() {
               console.error(`[SYNC] ${msg}`);
               logs.push(msg);
               syncResultsArr.push({ sku: item.sku, status: "error", action: "create_failed", message: userErrors[0].message, rowNumber: item.rowNumber, productTitle: item.title || "" });
-              createProgress++;
-              await updateSyncSession(shopDomain, { type: "progress", current: createProgress, total: createBatch.length, message: `Step 2/6: Creating NEW products (${createProgress}/${createBatch.length})...` });
               return;
             }
             
@@ -2097,9 +2106,33 @@ async function startServer() {
               }
               
             }
+              };
+              
+              // Wrap in timeout promise
+              const timeoutPromise = new Promise<void>((_, reject) => 
+                setTimeout(() => reject(new Error('Product creation timeout (60s)')), 60000)
+              );
+              
+              await Promise.race([productCreationWork(), timeoutPromise]);
             
             createProgress++;
             await updateSyncSession(shopDomain, { type: "progress", current: createProgress, total: createBatch.length, message: `Step 2/6: Creating NEW products (${createProgress}/${createBatch.length})...` });
+            } catch (err: any) {
+              // Catch ALL errors (timeout, network, validation, etc.) to prevent batch failure
+              const errorMsg = err.message || String(err);
+              console.error(`[SYNC] Product creation failed for ${item.sku}:`, errorMsg);
+              logs.push(`Create Error (${item.sku}): ${errorMsg}`);
+              syncResultsArr.push({ 
+                sku: item.sku, 
+                status: "error", 
+                action: "create_failed", 
+                message: errorMsg, 
+                rowNumber: item.rowNumber, 
+                productTitle: item.title || "" 
+              });
+              createProgress++;
+              await updateSyncSession(shopDomain, { type: "progress", current: createProgress, total: createBatch.length, message: `Step 2/6: Creating NEW products (${createProgress}/${createBatch.length})...` });
+            }
           }, 5); // 5 concurrent product creation pipelines
           
           console.log(`[SYNC] Created ${createdCount} products`);
@@ -2442,7 +2475,19 @@ async function startServer() {
         await updateSyncSession(shopDomain, { type: "complete", updatedCount: totalUpdated, errorCount: logs.length, logs, duration: Date.now() - startTime, syncLogId, syncResults: syncResultsArr, syncMode });
       } catch (err: any) {
         console.error(`[SYNC] Global Error:`, err);
-        await updateSyncSession(shopDomain, { type: "error", message: err.message, syncLogId, syncResults: syncResultsArr, logs, duration: Date.now() - startTime, syncMode });
+        // ALWAYS save sync history on error — include partial progress
+        const partialUpdated = createdCount + (syncResultsArr.filter(r => r.status === "updated").length);
+        await updateSyncSession(shopDomain, { 
+          type: "error", 
+          message: err.message || "Sync failed", 
+          syncLogId, 
+          syncResults: syncResultsArr, 
+          logs: [...logs, `Fatal Error: ${err.message}`], 
+          duration: Date.now() - startTime, 
+          syncMode,
+          updatedCount: partialUpdated,
+          errorCount: logs.length + 1
+        });
       }
     })();
     res.json({ success: true });
