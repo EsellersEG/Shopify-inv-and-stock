@@ -172,6 +172,7 @@ async function initDatabase() {
   try { await pool.query("ALTER TABLE filter_rules ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()"); } catch {}
 
   // Add missing columns to sync_logs for richer tracking
+  try { await pool.query("ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS shop_domain TEXT NOT NULL DEFAULT ''"); } catch {}
   try { await pool.query("ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS sync_mode TEXT DEFAULT 'all'"); } catch {}
   try { await pool.query("ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS total_count INT DEFAULT 0"); } catch {}
   try { await pool.query("ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS created_count INT DEFAULT 0"); } catch {}
